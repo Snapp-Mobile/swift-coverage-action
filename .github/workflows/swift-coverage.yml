@@ -373,28 +373,31 @@ jobs:
             issue_number: context.payload.pull_request.number,
           });
 
-          // Identify and delete ONLY previous comments with the same job ID
+          // Identify previous comment with the same job ID
           const botComments = comments.data.filter(comment =>
             comment.body.includes(commentMarker)
           );
 
-          for (const botComment of botComments) {
-            await github.rest.issues.deleteComment({
+          if (botComments.length > 0) {
+            // Comment already exists, edit it
+            const existingComment = botComments[0];
+            await github.rest.issues.updateComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              comment_id: botComment.id,
+              comment_id: existingComment.id,
+              body: newComment,
             });
+            console.log(`✅ Coverage comment updated successfully (ID: ${jobId})`);
+          } else {
+            // No previous comment, create new one
+            await github.rest.issues.createComment({
+              issue_number: context.payload.pull_request.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: newComment,
+            });
+            console.log(`✅ Coverage comment posted successfully (ID: ${jobId})`);
           }
-
-          // Create a comment on the pull request
-          await github.rest.issues.createComment({
-            issue_number: context.payload.pull_request.number,
-            owner: context.repo.owner,
-            repo: context.repo.repo,
-            body: newComment,
-          });
-
-          console.log(`✅ Coverage comment posted successfully (ID: ${jobId})`);
 
     - name: Check Coverage Threshold
       if: inputs.fail-on-low-coverage && inputs.coverage-threshold != ''

@@ -67,17 +67,22 @@ jobs:
             });
 
             const oldComments = comments.data.filter(c => c.body.includes(commentMarker));
-            for (const c of oldComments) {
-              await github.rest.issues.deleteComment({
+
+            if (oldComments.length > 0) {
+              // Comment already exists, edit it
+              const existingComment = oldComments[0];
+              await github.rest.issues.updateComment({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                comment_id: c.id,
+                comment_id: existingComment.id,
+                body: comment,
+              });
+            } else {
+              // No previous comment, create new one
+              await github.rest.issues.createComment({
+                issue_number: context.payload.pull_request.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: comment,
               });
             }
-
-            await github.rest.issues.createComment({
-              issue_number: context.payload.pull_request.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: comment,
-            });
