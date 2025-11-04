@@ -2,11 +2,11 @@
 
 <div align="center">
 
-[![Release](https://img.shields.io/github/v/release/oleksiikolomiietssnapp/swift-coverage-action)](https://github.com/oleksiikolomiietssnapp/swift-coverage-action/releases)
+[![Release](https://img.shields.io/github/v/release/Snapp-Mobile/swift-coverage-action)](https://github.com/Snapp-Mobile/swift-coverage-action/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![CI](https://img.shields.io/github/actions/workflow/status/oleksiikolomiietssnapp/swift-coverage-action/test-samples.yml?branch=main&label=tests&logo=github)](https://github.com/oleksiikolomiietssnapp/swift-coverage-action/actions)
+[![CI](https://img.shields.io/github/actions/workflow/status/Snapp-Mobile/swift-coverage-action/test-samples.yml?branch=main&label=tests&logo=github)](https://github.com/Snapp-Mobile/swift-coverage-action/actions)
 [![SPM](https://img.shields.io/badge/SPM-Compatible-brightgreen.svg?logo=swift)](https://swift.org/package-manager/)
-[![Platform](https://img.shields.io/badge/Platform-macOS-lightgrey.svg?logo=apple)](https://github.com/oleksiikolomiietssnapp/swift-coverage-action)
+[![Platform](https://img.shields.io/badge/Platform-macOS-lightgrey.svg?logo=apple)](https://github.com/Snapp-Mobile/swift-coverage-action)
 
 [![macOS](https://img.shields.io/badge/macOS-Configurable_(default:_latest)-blue.svg?logo=apple)](https://github.com/actions/runner-images)
 [![Xcode](https://img.shields.io/badge/Xcode-Configurable_(default:_system)-blue.svg?logo=xcode)](https://developer.apple.com/xcode/)
@@ -53,7 +53,7 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: oleksiikolomiietssnapp/swift-coverage-action@v1.0.0
+      - uses: Snapp-Mobile/swift-coverage-action@v1.0.0
 ```
 
 ### As a Reusable Workflow
@@ -63,7 +63,7 @@ Alternatively, you can use the reusable workflow:
 ```yaml
 jobs:
   coverage:
-    uses: oleksiikolomiietssnapp/swift-coverage-action/.github/workflows/swift-coverage.yml@main
+    uses: Snapp-Mobile/swift-coverage-action/.github/workflows/swift-coverage.yml@main
 ```
 
 Permissions are inherited automatically when needed.
@@ -83,7 +83,7 @@ All inputs are optional with sensible defaults. Choose your preferred usage meth
 ### As GitHub Marketplace Action
 
 ```yaml
-- uses: oleksiikolomiietssnapp/swift-coverage-action@v1.0.0
+- uses: Snapp-Mobile/swift-coverage-action@v1.0.0
   with:
     # Environment
     macos-version: "latest"            # "latest", "15", "14", etc.
@@ -110,7 +110,7 @@ All inputs are optional with sensible defaults. Choose your preferred usage meth
 ```yaml
 jobs:
   coverage:
-    uses: oleksiikolomiietssnapp/swift-coverage-action/.github/workflows/swift-coverage.yml@main
+    uses: Snapp-Mobile/swift-coverage-action/.github/workflows/swift-coverage.yml@main
     with:
       # Environment
       macos-version: "latest"
