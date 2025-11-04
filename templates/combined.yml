@@ -10,7 +10,7 @@ on:
 
 jobs:
   coverage-ios:
-    uses: oleksiikolomiietssnapp/swift-coverage-action@latest
+    uses: Snapp-Mobile/swift-coverage-action@latest
     with:
       macos-version: "15"
       xcode-version: "16.1"
@@ -19,7 +19,7 @@ jobs:
       coverage-threshold: "80"
 
   coverage-macos:
-    uses: oleksiikolomiietssnapp/swift-coverage-action@latest
+    uses: Snapp-Mobile/swift-coverage-action@latest
     with:
       macos-version: "15"
       xcode-version: "16.1"
@@ -37,7 +37,7 @@ jobs:
     steps:
       - uses: actions/github-script@v7
         with:
-          script: |
+          script: |\
             const jobOutputs = [
               {
                 name: "${{ needs.coverage-ios.outputs.job-name }}",
