@@ -2,10 +2,12 @@
 
 All notable changes to this project are documented here.
 
-## [1.0.1] - 2025-10-28
+## [1.0.1] - 2025-11-04
 
 ### Changed
-- Added marketplace tags for better discoverability
+- Repository transferred to Snapp Mobile organization
+- Updated GitHub repository URL references
+- Updated LICENSE copyright to Snapp Mobile Germany GmbH
 
 ## [1.0.0] - 2025-10-28
 
