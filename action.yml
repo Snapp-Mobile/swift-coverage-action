@@ -251,7 +251,6 @@ runs:
 
               if [ -n "$longest_target" ]; then
                 target_name="$longest_target"
-                echo "Matched $filename → $target_name (Package.swift)"
               fi
             fi
 
@@ -260,19 +259,11 @@ runs:
               if echo "$filename" | grep -q '/Sources/[^/]*/'; then
                 # Pattern: .../Sources/TargetName/...
                 target_name=$(echo "$filename" | sed -E 's|.*/Sources/([^/]+)/.*|\1|')
-                echo "Matched $filename → $target_name (folder_pattern)"
               elif echo "$filename" | grep -q '/Sources/[^/]*\.swift$'; then
                 # Pattern: .../Sources/file.swift (direct in Sources)
                 target_name=$(echo "$filename" | sed -E 's|.*/Sources/([^/]*)\.swift$|\1|')
-                echo "Matched $filename → $target_name (folder_pattern)"
               else
                 target_name="$PROJECT_NAME"
-                echo "Matched $filename → $target_name (fallback to project name)"
-              fi
-
-              # Log when falling back to pattern matching
-              if [ -f "$TARGET_MAPPINGS_FILE" ]; then
-                echo "File $filename could not be matched to Package.swift targets, used pattern matching: $target_name"
               fi
             fi
 
