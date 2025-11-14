@@ -199,6 +199,14 @@ jobs:
         jq -r '.data[].files[] | select((.filename | test("/\\.build/")) or (.filename | test("\\.swift$") | not) or (.filename | test("/(Tests?|test)/"))) | .filename' "$CODECOV_PATH" | head -10
         echo ""
 
+        # Check if any files match SnappThemingSwiftUIHelpers path
+        echo "Files matching each target path:"
+        echo "  SnappTheming:"
+        jq -r '.data[].files[] | select(.filename | test("Sources/SnappTheming/")) | .filename' "$CODECOV_PATH" | wc -l
+        echo "  SnappThemingSwiftUIHelpers:"
+        jq -r '.data[].files[] | select(.filename | test("Sources/SnappThemingSwiftUIHelpers/")) | .filename' "$CODECOV_PATH" | wc -l
+        echo ""
+
         # Initialize - check if threshold is set
         THRESHOLD="${{ inputs.coverage-threshold }}"
         if [ -n "$THRESHOLD" ]; then
