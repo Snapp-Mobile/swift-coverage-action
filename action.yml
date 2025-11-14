@@ -170,14 +170,14 @@ runs:
         fi
 
         # Check if there are any actual source files to report on
-        SOURCE_FILE_COUNT=$(jq -r '.data[0].files[] | select(.filename | test("/\\.build/") | not) | select(.filename | test("\\.swift$")) | select(.filename | test("/(Tests?|test)/") | not) | .filename' "$CODECOV_PATH" | wc -l)
+        SOURCE_FILE_COUNT=$(jq -r '.data[].files[] | select(.filename | test("/\\.build/") | not) | select(.filename | test("\\.swift$")) | select(.filename | test("/(Tests?|test)/") | not) | .filename' "$CODECOV_PATH" | wc -l)
 
         if [ "$SOURCE_FILE_COUNT" -eq 0 ]; then
           # Create a placeholder entry when no source files exist
           ALL_FILES="$PROJECT_NAME|0|0"
         else
           # Extract all Swift files excluding build artifacts
-          ALL_FILES=$(jq -r '.data[0].files[] | select(.filename | test("/\\.build/") | not) | select(.filename | test("\\.swift$")) | select(.filename | test("/(Tests?|test)/") | not) | "\(.filename)|\(.summary.lines.count)|\(.summary.lines.covered)"' "$CODECOV_PATH")
+          ALL_FILES=$(jq -r '.data[].files[] | select(.filename | test("/\\.build/") | not) | select(.filename | test("\\.swift$")) | select(.filename | test("/(Tests?|test)/") | not) | "\(.filename)|\(.summary.lines.count)|\(.summary.lines.covered)"' "$CODECOV_PATH")
         fi
 
         # Initialize - check if threshold is set
@@ -262,7 +262,7 @@ runs:
         fi
 
         echo "TOTAL FILES IN COVERAGE:"
-        jq '.data[0].files | length' "$CODECOV_PATH"
+        jq '[.data[].files[]] | length' "$CODECOV_PATH"
 
         # Log summary of target detection
         if [ -f "$TARGET_MAPPINGS_FILE" ]; then
