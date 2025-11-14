@@ -253,6 +253,17 @@ runs:
           fi
         done <<< "$ALL_FILES"
 
+        # Log file counts by target
+        echo "FILES MATCHED BY TARGET:"
+        if [ -f "$TARGETS_DATA" ]; then
+          cut -d'|' -f1 "$TARGETS_DATA" | sort | uniq -c | while read count target; do
+            echo "  $target: $count files"
+          done
+        fi
+
+        echo "TOTAL FILES IN COVERAGE:"
+        jq '.data[0].files | length' "$CODECOV_PATH"
+
         # Log summary of target detection
         if [ -f "$TARGET_MAPPINGS_FILE" ]; then
           echo "=== Target Detection Summary ==="
