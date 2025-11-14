@@ -137,6 +137,38 @@ runs:
           SOURCE_PATH="${PROJECT_NAME}/Sources"
         fi
 
+        # Parse Package.swift if it exists to get accurate target information
+        echo "Attempting to parse Package.swift for target information"
+        TARGET_MAPPINGS_FILE="/tmp/package_swift_targets.txt"
+        if [ -f "Package.swift" ]; then
+          echo "Package.swift found, parsing targets"
+          PACKAGE_JSON=$(swift package describe --type json 2>/dev/null)
+          if [ $? -eq 0 ]; then
+            # Extract targets excluding test, binary, and plugin targets
+            echo "$PACKAGE_JSON" | jq -r '.targets[] |
+              select(.type != "test" and .type != "binary" and .type != "plugin") |
+              select(.module_type == "SwiftTarget") |
+              "\(.path)|\(.name)"' > "$TARGET_MAPPINGS_FILE" 2>/dev/null
+
+            TARGET_COUNT=$(wc -l < "$TARGET_MAPPINGS_FILE" 2>/dev/null || echo 0)
+            if [ "$TARGET_COUNT" -gt 0 ]; then
+              echo "Successfully parsed Package.swift with $TARGET_COUNT targets"
+              echo "Detected targets:"
+              while IFS='|' read -r target_path target_name; do
+                echo "  - $target_name (path: $target_path)"
+              done < "$TARGET_MAPPINGS_FILE"
+            else
+              echo "No valid targets found in Package.swift, will use folder patterns"
+              rm -f "$TARGET_MAPPINGS_FILE"
+            fi
+          else
+            echo "Failed to parse Package.swift, falling back to folder pattern matching"
+            rm -f "$TARGET_MAPPINGS_FILE"
+          fi
+        else
+          echo "No Package.swift found, using folder pattern matching"
+        fi
+
         # Check if there are any actual source files to report on
         SOURCE_FILE_COUNT=$(jq -r '.data[0].files[] | select(.filename | test("/\\.build/") | not) | select(.filename | test("\\.swift$")) | select(.filename | test("/(Tests?|test)/") | not) | .filename' "$CODECOV_PATH" | wc -l)
 
@@ -164,20 +196,51 @@ runs:
         # Parse files and group by target
         while IFS='|' read -r filename total_lines covered_lines; do
           if [ -n "$filename" ]; then
-            # Extract target name from file path patterns:
-            # Pattern 1: /path/to/TargetName/Sources/...
-            # Pattern 2: /path/to/Sources/TargetName/...
-            # Pattern 3: /path/to/TargetName/...
+            # Extract target name from file path
+            # Priority 1: Try matching against Package.swift paths
+            # Priority 2: Fall back to folder pattern matching
             target_name=""
 
-            if echo "$filename" | grep -q '/Sources/[^/]*/'; then
-              # Pattern: .../Sources/TargetName/...
-              target_name=$(echo "$filename" | sed -E 's|.*/Sources/([^/]+)/.*|\1|')
-            elif echo "$filename" | grep -q '/Sources/[^/]*\.swift$'; then
-              # Pattern: .../Sources/file.swift (direct in Sources)
-              target_name=$(echo "$filename" | sed -E 's|.*/Sources/([^/]*)\.swift$|\1|')
-            else
-              target_name="$PROJECT_NAME"
+            # First try Package.swift mapping if available
+            if [ -f "$TARGET_MAPPINGS_FILE" ]; then
+              longest_match=""
+              longest_target=""
+
+              while IFS='|' read -r target_path target_id; do
+                if [[ "$filename" == *"$target_path"* ]]; then
+                  # Keep track of longest matching path for specificity
+                  if [ ${#target_path} -gt ${#longest_match} ]; then
+                    longest_match="$target_path"
+                    longest_target="$target_id"
+                  fi
+                fi
+              done < "$TARGET_MAPPINGS_FILE"
+
+              if [ -n "$longest_target" ]; then
+                target_name="$longest_target"
+                echo "Matched $filename → $target_name (Package.swift)"
+              fi
+            fi
+
+            # Fall back to folder pattern matching if no Package.swift match
+            if [ -z "$target_name" ]; then
+              if echo "$filename" | grep -q '/Sources/[^/]*/'; then
+                # Pattern: .../Sources/TargetName/...
+                target_name=$(echo "$filename" | sed -E 's|.*/Sources/([^/]+)/.*|\1|')
+                echo "Matched $filename → $target_name (folder_pattern)"
+              elif echo "$filename" | grep -q '/Sources/[^/]*\.swift$'; then
+                # Pattern: .../Sources/file.swift (direct in Sources)
+                target_name=$(echo "$filename" | sed -E 's|.*/Sources/([^/]*)\.swift$|\1|')
+                echo "Matched $filename → $target_name (folder_pattern)"
+              else
+                target_name="$PROJECT_NAME"
+                echo "Matched $filename → $target_name (fallback to project name)"
+              fi
+
+              # Log when falling back to pattern matching
+              if [ -f "$TARGET_MAPPINGS_FILE" ]; then
+                echo "File $filename could not be matched to Package.swift targets, used pattern matching: $target_name"
+              fi
             fi
 
             # Skip if target name looks like a test
@@ -189,6 +252,17 @@ runs:
             echo "$target_name|$total_lines|$covered_lines" >> "$TARGETS_DATA"
           fi
         done <<< "$ALL_FILES"
+
+        # Log summary of target detection
+        if [ -f "$TARGET_MAPPINGS_FILE" ]; then
+          echo "=== Target Detection Summary ==="
+          echo "Package.swift was successfully parsed"
+          DETECTED_TARGETS=$(cut -d'|' -f2 "$TARGET_MAPPINGS_FILE" | sort -u)
+          echo "Targets from Package.swift:"
+          echo "$DETECTED_TARGETS" | while read -r target; do
+            echo "  ✓ $target"
+          done
+        fi
 
         # Aggregate data by target
         AGGREGATED_DATA=$(mktemp)
