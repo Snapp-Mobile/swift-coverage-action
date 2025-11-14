@@ -182,9 +182,12 @@ runs:
         echo "Processing coverage data..."
         CODECOV_PATH="${{ env.CODECOV_PATH }}"
 
-        # Show available metrics in coverage JSON
-        echo "Available metrics in coverage data:"
-        jq '.data[0].files[0].summary | keys' "$CODECOV_PATH"
+        # Show coverage JSON structure
+        echo "Coverage JSON structure:"
+        jq '.data | map({files_count: (.files | length), first_file: .files[0].filename, metrics: (.files[0].summary | keys)})' "$CODECOV_PATH"
+        echo ""
+        echo "Full available metrics (example file):"
+        jq '.data[0].files[0] | {filename, summary}' "$CODECOV_PATH"
         echo ""
 
         # Extract all Swift files excluding build artifacts and tests
