@@ -202,6 +202,9 @@ jobs:
           fi
 
           echo "Processing: $CODECOV_PATH"
+          echo "Coverage JSON structure:"
+          jq '.data[] | {files: (.files | length), sample_files: (.files[0:2] | map({filename, summary}))}' "$CODECOV_PATH"
+          echo ""
 
           # Extract files from this coverage file
           FILES=$(jq -r '.data[].files[] | select(.filename | test("/\\.build/") | not) | select(.filename | test("\\.swift$")) | select(.filename | test("/(Tests?|test)/") | not) | "\(.filename)|\(.summary.lines.count)|\(.summary.lines.covered)"' "$CODECOV_PATH")
