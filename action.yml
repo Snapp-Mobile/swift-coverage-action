@@ -182,29 +182,8 @@ runs:
         echo "Processing coverage data..."
         CODECOV_PATH="${{ env.CODECOV_PATH }}"
 
-        # Show coverage JSON structure
-        echo "Coverage JSON structure:"
-        jq '.data | map({files_count: (.files | length), first_file: .files[0].filename, metrics: (.files[0].summary | keys)})' "$CODECOV_PATH"
-        echo ""
-        echo "Full available metrics (example file):"
-        jq '.data[0].files[0] | {filename, summary}' "$CODECOV_PATH"
-        echo ""
-
         # Extract all Swift files excluding build artifacts and tests
         ALL_FILES=$(jq -r '.data[].files[] | select(.filename | test("/\\.build/") | not) | select(.filename | test("\\.swift$")) | select(.filename | test("/(Tests?|test)/") | not) | "\(.filename)|\(.summary.lines.count)|\(.summary.lines.covered)"' "$CODECOV_PATH")
-
-        # Show what files are being filtered out
-        echo "Files filtered out:"
-        jq -r '.data[].files[] | select((.filename | test("/\\.build/")) or (.filename | test("\\.swift$") | not) or (.filename | test("/(Tests?|test)/"))) | .filename' "$CODECOV_PATH" | head -10
-        echo ""
-
-        # Check if any files match SnappThemingSwiftUIHelpers path
-        echo "Files matching each target path:"
-        echo "  SnappTheming:"
-        jq -r '.data[].files[] | select(.filename | test("Sources/SnappTheming/")) | .filename' "$CODECOV_PATH" | wc -l
-        echo "  SnappThemingSwiftUIHelpers:"
-        jq -r '.data[].files[] | select(.filename | test("Sources/SnappThemingSwiftUIHelpers/")) | .filename' "$CODECOV_PATH" | wc -l
-        echo ""
 
         # Initialize - check if threshold is set
         THRESHOLD="${{ inputs.coverage-threshold }}"
@@ -290,23 +269,6 @@ runs:
           echo "$DETECTED_TARGETS" | while read -r target; do
             echo "  ✓ $target"
           done
-        fi
-
-        # Debug: Show coverage calculation breakdown
-        echo "Coverage Calculation Breakdown:"
-        if [ -s "$TARGETS_DATA" ]; then
-          # Calculate totals
-          TOTAL_LINES_ALL=$(awk -F'|' '{sum+=$2} END {print sum}' "$TARGETS_DATA")
-          COVERED_LINES_ALL=$(awk -F'|' '{sum+=$3} END {print sum}' "$TARGETS_DATA")
-          if [ "$TOTAL_LINES_ALL" -gt 0 ]; then
-            OVERALL_PCT=$(echo "scale=2; $COVERED_LINES_ALL * 100 / $TOTAL_LINES_ALL" | bc)
-          else
-            OVERALL_PCT=0
-          fi
-          echo "  Total Lines: $TOTAL_LINES_ALL"
-          echo "  Covered Lines: $COVERED_LINES_ALL"
-          echo "  Overall: $OVERALL_PCT% = ($COVERED_LINES_ALL * 100) / $TOTAL_LINES_ALL"
-          echo ""
         fi
 
         # Aggregate data by target
