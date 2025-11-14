@@ -183,6 +183,11 @@ jobs:
         echo "Processing coverage data..."
         CODECOV_PATH="${{ env.CODECOV_PATH }}"
 
+        # Show available metrics in coverage JSON
+        echo "Available metrics in coverage data:"
+        jq '.data[0].files[0].summary | keys' "$CODECOV_PATH"
+        echo ""
+
         # Extract all Swift files excluding build artifacts and tests
         ALL_FILES=$(jq -r '.data[].files[] | select(.filename | test("/\\.build/") | not) | select(.filename | test("\\.swift$")) | select(.filename | test("/(Tests?|test)/") | not) | "\(.filename)|\(.summary.lines.count)|\(.summary.lines.covered)"' "$CODECOV_PATH")
 
@@ -269,6 +274,23 @@ jobs:
           echo "$DETECTED_TARGETS" | while read -r target; do
             echo "  ✓ $target"
           done
+        fi
+
+        # Debug: Show coverage calculation breakdown
+        echo "Coverage Calculation Breakdown:"
+        if [ -s "$TARGETS_DATA" ]; then
+          # Calculate totals
+          TOTAL_LINES_ALL=$(awk -F'|' '{sum+=$2} END {print sum}' "$TARGETS_DATA")
+          COVERED_LINES_ALL=$(awk -F'|' '{sum+=$3} END {print sum}' "$TARGETS_DATA")
+          if [ "$TOTAL_LINES_ALL" -gt 0 ]; then
+            OVERALL_PCT=$(echo "scale=2; $COVERED_LINES_ALL * 100 / $TOTAL_LINES_ALL" | bc)
+          else
+            OVERALL_PCT=0
+          fi
+          echo "  Total Lines: $TOTAL_LINES_ALL"
+          echo "  Covered Lines: $COVERED_LINES_ALL"
+          echo "  Overall: $OVERALL_PCT% = ($COVERED_LINES_ALL * 100) / $TOTAL_LINES_ALL"
+          echo ""
         fi
 
         # Aggregate data by target
