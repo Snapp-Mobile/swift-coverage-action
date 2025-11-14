@@ -113,13 +113,35 @@ runs:
       shell: bash
       run: swift --version
 
-    - name: Run Swift Tests with Coverage
+    - name: Run Swift Tests with Coverage (Per-Target)
       shell: bash
       working-directory: ${{ inputs.working-directory }}
       run: |
-        swift test --enable-swift-testing --enable-code-coverage
-        CODECOV_PATH=$(swift test --enable-swift-testing --enable-code-coverage --show-codecov-path)
-        echo "CODECOV_PATH=$CODECOV_PATH" >> $GITHUB_ENV
+        # Parse Package.swift to get targets
+        echo "Parsing Package.swift for targets..."
+        PACKAGE_JSON=$(swift package describe --type json 2>/dev/null)
+
+        TARGETS=$(echo "$PACKAGE_JSON" | jq -r '.targets[] | select(.type != "test" and .type != "binary" and .type != "plugin") | select(.module_type == "SwiftTarget") | .name' | sort)
+
+        echo "Found targets: $TARGETS"
+        echo ""
+
+        # Run tests per target
+        COVERAGE_PATHS=""
+        for target in $TARGETS; do
+          echo "Running tests for target: $target"
+          swift test --filter $target --enable-swift-testing --enable-code-coverage 2>&1 | tail -5
+
+          # Get coverage path for this target
+          CODECOV_PATH=$(swift test --filter $target --enable-swift-testing --enable-code-coverage --show-codecov-path 2>/dev/null)
+          if [ -n "$CODECOV_PATH" ] && [ -f "$CODECOV_PATH" ]; then
+            echo "  Coverage: $CODECOV_PATH"
+            COVERAGE_PATHS="$COVERAGE_PATHS $CODECOV_PATH"
+          fi
+          echo ""
+        done
+
+        echo "COVERAGE_PATHS=$COVERAGE_PATHS" >> $GITHUB_ENV
 
     - name: Process Coverage Data
       id: extract
@@ -169,16 +191,27 @@ runs:
           echo "No Package.swift found, using folder pattern matching"
         fi
 
-        # Check if there are any actual source files to report on
-        SOURCE_FILE_COUNT=$(jq -r '.data[].files[] | select(.filename | test("/\\.build/") | not) | select(.filename | test("\\.swift$")) | select(.filename | test("/(Tests?|test)/") | not) | .filename' "$CODECOV_PATH" | wc -l)
+        # Collect all coverage data from all targets
+        ALL_FILES=""
+        echo "Processing coverage from ${{ env.COVERAGE_PATHS }}"
+        for CODECOV_PATH in ${{ env.COVERAGE_PATHS }}; do
+          if [ ! -f "$CODECOV_PATH" ]; then
+            echo "Warning: Coverage file not found: $CODECOV_PATH"
+            continue
+          fi
 
-        if [ "$SOURCE_FILE_COUNT" -eq 0 ]; then
-          # Create a placeholder entry when no source files exist
-          ALL_FILES="$PROJECT_NAME|0|0"
-        else
-          # Extract all Swift files excluding build artifacts
-          ALL_FILES=$(jq -r '.data[].files[] | select(.filename | test("/\\.build/") | not) | select(.filename | test("\\.swift$")) | select(.filename | test("/(Tests?|test)/") | not) | "\(.filename)|\(.summary.lines.count)|\(.summary.lines.covered)"' "$CODECOV_PATH")
-        fi
+          echo "Processing: $CODECOV_PATH"
+
+          # Extract files from this coverage file
+          FILES=$(jq -r '.data[].files[] | select(.filename | test("/\\.build/") | not) | select(.filename | test("\\.swift$")) | select(.filename | test("/(Tests?|test)/") | not) | "\(.filename)|\(.summary.lines.count)|\(.summary.lines.covered)"' "$CODECOV_PATH")
+
+          if [ -n "$FILES" ]; then
+            ALL_FILES="$ALL_FILES"$'\n'"$FILES"
+          fi
+        done
+
+        # Remove leading newline if exists
+        ALL_FILES=$(echo "$ALL_FILES" | sed '/^$/d')
 
         # Initialize - check if threshold is set
         THRESHOLD="${{ inputs.coverage-threshold }}"
