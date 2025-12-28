@@ -113,6 +113,59 @@ runs:
       shell: bash
       run: swift --version
 
+    - name: Detect Platforms from Package.swift
+      id: detect-platforms
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        echo "🔍 Detecting platforms from Package.swift..."
+        echo ""
+
+        # Check if Package.swift exists
+        if [ ! -f "Package.swift" ]; then
+          echo "⚠️  Package.swift not found in working directory"
+          echo "Defaulting to macOS platform"
+          PLATFORMS_TO_TEST="macos"
+        else
+          # Parse Package.swift to detect platforms
+          echo "📦 Parsing Package.swift..."
+
+          set +e
+          PACKAGE_JSON=$(swift package dump-package 2>&1)
+          DUMP_EXIT_CODE=$?
+          set -e
+
+          if [ $DUMP_EXIT_CODE -ne 0 ]; then
+            echo "⚠️  Failed to parse Package.swift:"
+            echo "$PACKAGE_JSON"
+            echo ""
+            echo "Defaulting to macOS platform"
+            PLATFORMS_TO_TEST="macos"
+          else
+            # Extract platform names (lowercase)
+            DETECTED_PLATFORMS=$(echo "$PACKAGE_JSON" | jq -r '.platforms[]?.platformName // empty' | tr '\n' ',' | sed 's/,$//')
+
+            if [ -z "$DETECTED_PLATFORMS" ]; then
+              # No platforms specified in Package.swift - default to macOS
+              PLATFORMS_TO_TEST="macos"
+              echo "ℹ️  No platforms specified in Package.swift"
+              echo "Defaulting to macOS platform"
+            else
+              PLATFORMS_TO_TEST="$DETECTED_PLATFORMS"
+              echo "✅ Detected platforms: $PLATFORMS_TO_TEST"
+            fi
+          fi
+        fi
+
+        echo ""
+        echo "platforms=$PLATFORMS_TO_TEST" >> $GITHUB_OUTPUT
+
+        # Log for visibility in Phase 1 (not used for testing yet)
+        echo "📋 Platform detection complete"
+        echo "   Platforms: $PLATFORMS_TO_TEST"
+        echo "   Note: Currently testing on macOS only (multi-platform support coming in future phases)"
+        echo ""
+
     - name: Run Swift Tests with Coverage
       shell: bash
       working-directory: ${{ inputs.working-directory }}
