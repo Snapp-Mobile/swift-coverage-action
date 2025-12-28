@@ -174,114 +174,301 @@ runs:
         echo "🧪 Running tests for platforms: $PLATFORMS"
         echo ""
 
-        # Check if iOS is in the platform list
-        if echo "$PLATFORMS" | grep -q "ios"; then
-          echo "📱 iOS platform detected - using xcodebuild with simulator"
+        # Get project name for scheme (used by xcodebuild)
+        PROJECT_NAME="${{ inputs.project-name-override }}"
+        if [ -z "$PROJECT_NAME" ]; then
+          PROJECT_NAME="${{ github.event.repository.name }}"
+        fi
+
+        # Create temp file to store coverage paths from all platforms
+        COVERAGE_PATHS_FILE=$(mktemp)
+        FAILED_PLATFORMS=""
+
+        # Split platforms by comma and loop
+        IFS=',' read -ra PLATFORM_ARRAY <<< "$PLATFORMS"
+
+        for platform in "${PLATFORM_ARRAY[@]}"; do
+          # Trim whitespace
+          platform=$(echo "$platform" | xargs)
+
+          echo "========================================"
+          echo "Testing platform: $platform"
+          echo "========================================"
           echo ""
 
-          # Get project name for scheme
-          PROJECT_NAME="${{ inputs.project-name-override }}"
-          if [ -z "$PROJECT_NAME" ]; then
-            PROJECT_NAME="${{ github.event.repository.name }}"
-          fi
+          case "$platform" in
+            macos)
+              echo "🖥️  macOS platform - using swift test"
+              echo ""
 
-          echo "Using scheme: $PROJECT_NAME"
+              set +e
+              swift test --enable-swift-testing --enable-code-coverage
+              TEST_EXIT_CODE=$?
+              set -e
+
+              if [ $TEST_EXIT_CODE -eq 0 ]; then
+                CODECOV_PATH=$(swift test --enable-swift-testing --enable-code-coverage --show-codecov-path)
+                echo "macos|spm|$CODECOV_PATH" >> "$COVERAGE_PATHS_FILE"
+                echo "✅ macOS tests completed successfully"
+                echo "📊 Coverage: $CODECOV_PATH"
+              else
+                echo "❌ Error: macOS tests failed with exit code $TEST_EXIT_CODE"
+                FAILED_PLATFORMS="$FAILED_PLATFORMS macos"
+              fi
+              ;;
+
+            ios)
+              echo "📱 iOS platform - using xcodebuild with simulator"
+              echo ""
+
+              # Get the latest iOS runtime
+              echo "🔍 Finding iOS runtime..."
+              RUNTIME=$(xcrun simctl list runtimes | grep "iOS" | grep -v "unavailable" | tail -1 | grep -oE "com\.apple\.CoreSimulator\.SimRuntime\.iOS-[0-9-]+")
+
+              if [ -z "$RUNTIME" ]; then
+                echo "❌ Error: No iOS runtime available"
+                xcrun simctl list runtimes
+                FAILED_PLATFORMS="$FAILED_PLATFORMS ios"
+                continue
+              fi
+
+              echo "✅ Using runtime: $RUNTIME"
+
+              # Create iOS simulator
+              echo "📲 Creating iOS Simulator (iPhone 15)..."
+              set +e
+              SIMULATOR_ID=$(xcrun simctl create swift-coverage-ios com.apple.CoreSimulator.SimDeviceType.iPhone-15 "$RUNTIME" 2>&1 | tail -1)
+              CREATE_EXIT_CODE=$?
+              set -e
+
+              if [ $CREATE_EXIT_CODE -ne 0 ]; then
+                echo "❌ Error: Failed to create iOS simulator"
+                FAILED_PLATFORMS="$FAILED_PLATFORMS ios"
+                continue
+              fi
+
+              echo "✅ Created simulator: $SIMULATOR_ID"
+
+              # Boot simulator
+              echo "⏳ Booting simulator..."
+              set +e
+              xcrun simctl boot "$SIMULATOR_ID"
+              BOOT_EXIT_CODE=$?
+              set -e
+
+              if [ $BOOT_EXIT_CODE -ne 0 ]; then
+                echo "❌ Error: Failed to boot simulator"
+                xcrun simctl delete "$SIMULATOR_ID" || true
+                FAILED_PLATFORMS="$FAILED_PLATFORMS ios"
+                continue
+              fi
+
+              echo "✅ Simulator booted, waiting for ready state..."
+              sleep 5
+
+              # Run tests
+              echo "🧪 Running tests on iOS Simulator..."
+              set +e
+              xcodebuild test \
+                -scheme "$PROJECT_NAME" \
+                -destination "id=$SIMULATOR_ID" \
+                -derivedDataPath .build/ios \
+                -enableCodeCoverage YES
+              TEST_EXIT_CODE=$?
+              set -e
+
+              # Cleanup simulator
+              echo "🧹 Cleaning up simulator..."
+              xcrun simctl shutdown "$SIMULATOR_ID" || true
+              xcrun simctl delete "$SIMULATOR_ID" || true
+
+              if [ $TEST_EXIT_CODE -eq 0 ]; then
+                XCRESULT=$(find .build/ios -name "*.xcresult" -type d | head -1)
+                if [ -n "$XCRESULT" ]; then
+                  echo "ios|xcresult|$XCRESULT" >> "$COVERAGE_PATHS_FILE"
+                  echo "✅ iOS tests completed successfully"
+                  echo "📊 Coverage: $XCRESULT"
+                else
+                  echo "⚠️  Warning: No coverage data found"
+                fi
+              else
+                echo "❌ Error: iOS tests failed with exit code $TEST_EXIT_CODE"
+                FAILED_PLATFORMS="$FAILED_PLATFORMS ios"
+              fi
+              ;;
+
+            tvos)
+              echo "📺 tvOS platform - using xcodebuild with simulator"
+              echo ""
+
+              RUNTIME=$(xcrun simctl list runtimes | grep "tvOS" | grep -v "unavailable" | tail -1 | grep -oE "com\.apple\.CoreSimulator\.SimRuntime\.tvOS-[0-9-]+")
+
+              if [ -z "$RUNTIME" ]; then
+                echo "❌ Error: No tvOS runtime available"
+                FAILED_PLATFORMS="$FAILED_PLATFORMS tvos"
+                continue
+              fi
+
+              echo "✅ Using runtime: $RUNTIME"
+
+              set +e
+              SIMULATOR_ID=$(xcrun simctl create swift-coverage-tvos com.apple.CoreSimulator.SimDeviceType.Apple-TV-4K-3rd-generation-4K "$RUNTIME" 2>&1 | tail -1)
+              CREATE_EXIT_CODE=$?
+              set -e
+
+              if [ $CREATE_EXIT_CODE -ne 0 ]; then
+                echo "❌ Error: Failed to create tvOS simulator"
+                FAILED_PLATFORMS="$FAILED_PLATFORMS tvos"
+                continue
+              fi
+
+              set +e
+              xcrun simctl boot "$SIMULATOR_ID"
+              sleep 5
+
+              xcodebuild test \
+                -scheme "$PROJECT_NAME" \
+                -destination "id=$SIMULATOR_ID" \
+                -derivedDataPath .build/tvos \
+                -enableCodeCoverage YES
+              TEST_EXIT_CODE=$?
+              set -e
+
+              xcrun simctl shutdown "$SIMULATOR_ID" || true
+              xcrun simctl delete "$SIMULATOR_ID" || true
+
+              if [ $TEST_EXIT_CODE -eq 0 ]; then
+                XCRESULT=$(find .build/tvos -name "*.xcresult" -type d | head -1)
+                if [ -n "$XCRESULT" ]; then
+                  echo "tvos|xcresult|$XCRESULT" >> "$COVERAGE_PATHS_FILE"
+                  echo "✅ tvOS tests completed successfully"
+                fi
+              else
+                echo "❌ Error: tvOS tests failed"
+                FAILED_PLATFORMS="$FAILED_PLATFORMS tvos"
+              fi
+              ;;
+
+            watchos)
+              echo "⌚ watchOS platform - using xcodebuild with simulator"
+              echo ""
+
+              RUNTIME=$(xcrun simctl list runtimes | grep "watchOS" | grep -v "unavailable" | tail -1 | grep -oE "com\.apple\.CoreSimulator\.SimRuntime\.watchOS-[0-9-]+")
+
+              if [ -z "$RUNTIME" ]; then
+                echo "❌ Error: No watchOS runtime available"
+                FAILED_PLATFORMS="$FAILED_PLATFORMS watchos"
+                continue
+              fi
+
+              echo "✅ Using runtime: $RUNTIME"
+
+              set +e
+              SIMULATOR_ID=$(xcrun simctl create swift-coverage-watchos com.apple.CoreSimulator.SimDeviceType.Apple-Watch-Series-9-45mm "$RUNTIME" 2>&1 | tail -1)
+              CREATE_EXIT_CODE=$?
+              set -e
+
+              if [ $CREATE_EXIT_CODE -ne 0 ]; then
+                echo "❌ Error: Failed to create watchOS simulator"
+                FAILED_PLATFORMS="$FAILED_PLATFORMS watchos"
+                continue
+              fi
+
+              set +e
+              xcrun simctl boot "$SIMULATOR_ID"
+              sleep 5
+
+              xcodebuild test \
+                -scheme "$PROJECT_NAME" \
+                -destination "id=$SIMULATOR_ID" \
+                -derivedDataPath .build/watchos \
+                -enableCodeCoverage YES
+              TEST_EXIT_CODE=$?
+              set -e
+
+              xcrun simctl shutdown "$SIMULATOR_ID" || true
+              xcrun simctl delete "$SIMULATOR_ID" || true
+
+              if [ $TEST_EXIT_CODE -eq 0 ]; then
+                XCRESULT=$(find .build/watchos -name "*.xcresult" -type d | head -1)
+                if [ -n "$XCRESULT" ]; then
+                  echo "watchos|xcresult|$XCRESULT" >> "$COVERAGE_PATHS_FILE"
+                  echo "✅ watchOS tests completed successfully"
+                fi
+              else
+                echo "❌ Error: watchOS tests failed"
+                FAILED_PLATFORMS="$FAILED_PLATFORMS watchos"
+              fi
+              ;;
+
+            visionos)
+              echo "🥽 visionOS platform - using xcodebuild with simulator"
+              echo ""
+
+              # visionOS uses xrOS as runtime name
+              RUNTIME=$(xcrun simctl list runtimes | grep "xrOS\|visionOS" | grep -v "unavailable" | tail -1 | grep -oE "com\.apple\.CoreSimulator\.SimRuntime\.(xrOS|visionOS)-[0-9-]+")
+
+              if [ -z "$RUNTIME" ]; then
+                echo "❌ Error: No visionOS runtime available"
+                FAILED_PLATFORMS="$FAILED_PLATFORMS visionos"
+                continue
+              fi
+
+              echo "✅ Using runtime: $RUNTIME"
+
+              set +e
+              SIMULATOR_ID=$(xcrun simctl create swift-coverage-visionos com.apple.CoreSimulator.SimDeviceType.Apple-Vision-Pro "$RUNTIME" 2>&1 | tail -1)
+              CREATE_EXIT_CODE=$?
+              set -e
+
+              if [ $CREATE_EXIT_CODE -ne 0 ]; then
+                echo "❌ Error: Failed to create visionOS simulator"
+                FAILED_PLATFORMS="$FAILED_PLATFORMS visionos"
+                continue
+              fi
+
+              set +e
+              xcrun simctl boot "$SIMULATOR_ID"
+              sleep 5
+
+              xcodebuild test \
+                -scheme "$PROJECT_NAME" \
+                -destination "id=$SIMULATOR_ID" \
+                -derivedDataPath .build/visionos \
+                -enableCodeCoverage YES
+              TEST_EXIT_CODE=$?
+              set -e
+
+              xcrun simctl shutdown "$SIMULATOR_ID" || true
+              xcrun simctl delete "$SIMULATOR_ID" || true
+
+              if [ $TEST_EXIT_CODE -eq 0 ]; then
+                XCRESULT=$(find .build/visionos -name "*.xcresult" -type d | head -1)
+                if [ -n "$XCRESULT" ]; then
+                  echo "visionos|xcresult|$XCRESULT" >> "$COVERAGE_PATHS_FILE"
+                  echo "✅ visionOS tests completed successfully"
+                fi
+              else
+                echo "❌ Error: visionOS tests failed"
+                FAILED_PLATFORMS="$FAILED_PLATFORMS visionos"
+              fi
+              ;;
+
+            *)
+              echo "⚠️  Warning: Unsupported platform: $platform"
+              ;;
+          esac
+
           echo ""
+        done
 
-          # Get the latest iOS runtime available
-          echo "🔍 Finding iOS runtime..."
-          RUNTIME=$(xcrun simctl list runtimes | grep "iOS" | grep -v "unavailable" | tail -1 | grep -oE "com\.apple\.CoreSimulator\.SimRuntime\.iOS-[0-9-]+")
+        # Save coverage paths file for processing
+        echo "COVERAGE_PATHS_FILE=$COVERAGE_PATHS_FILE" >> $GITHUB_ENV
 
-          if [ -z "$RUNTIME" ]; then
-            echo "❌ Error: No iOS runtime available"
-            echo "Available runtimes:"
-            xcrun simctl list runtimes
-            exit 1
-          fi
-
-          echo "✅ Using runtime: $RUNTIME"
-          echo ""
-
-          # Create iOS simulator
-          echo "📲 Creating iOS Simulator (iPhone 15)..."
-          set +e
-          SIMULATOR_ID=$(xcrun simctl create swift-coverage-test com.apple.CoreSimulator.SimDeviceType.iPhone-15 "$RUNTIME" 2>&1 | tail -1)
-          CREATE_EXIT_CODE=$?
-          set -e
-
-          if [ $CREATE_EXIT_CODE -ne 0 ]; then
-            echo "❌ Error: Failed to create iOS simulator"
-            echo "$SIMULATOR_ID"
-            exit 1
-          fi
-
-          echo "✅ Created simulator: $SIMULATOR_ID"
-          echo ""
-
-          # Boot simulator
-          echo "⏳ Booting simulator..."
-          set +e
-          xcrun simctl boot "$SIMULATOR_ID"
-          BOOT_EXIT_CODE=$?
-          set -e
-
-          if [ $BOOT_EXIT_CODE -ne 0 ]; then
-            echo "❌ Error: Failed to boot simulator"
-            xcrun simctl delete "$SIMULATOR_ID" || true
-            exit 1
-          fi
-
-          echo "✅ Simulator booted"
-          echo ""
-
-          # Wait for simulator to be ready
-          sleep 5
-
-          # Run tests with xcodebuild
-          echo "🧪 Running tests on iOS Simulator..."
-          set +e
-          xcodebuild test \
-            -scheme "$PROJECT_NAME" \
-            -destination "id=$SIMULATOR_ID" \
-            -derivedDataPath .build/ios \
-            -enableCodeCoverage YES
-          TEST_EXIT_CODE=$?
-          set -e
-
-          # Cleanup simulator
-          echo ""
-          echo "🧹 Cleaning up simulator..."
-          xcrun simctl shutdown "$SIMULATOR_ID" || true
-          xcrun simctl delete "$SIMULATOR_ID" || true
-
-          if [ $TEST_EXIT_CODE -ne 0 ]; then
-            echo "❌ Error: iOS tests failed with exit code $TEST_EXIT_CODE"
-            exit $TEST_EXIT_CODE
-          fi
-
-          echo "✅ iOS tests completed successfully"
-          echo ""
-
-          # Find coverage file (.xcresult)
-          XCRESULT=$(find .build/ios -name "*.xcresult" -type d | head -1)
-
-          if [ -z "$XCRESULT" ]; then
-            echo "⚠️  Warning: No .xcresult file found"
-            echo "CODECOV_PATH=" >> $GITHUB_ENV
-          else
-            echo "📊 Coverage data found: $XCRESULT"
-            echo "CODECOV_PATH=$XCRESULT" >> $GITHUB_ENV
-            echo "COVERAGE_TYPE=xcresult" >> $GITHUB_ENV
-          fi
-
-        else
-          echo "🖥️  macOS platform - using swift test"
-          echo ""
-
-          swift test --enable-swift-testing --enable-code-coverage
-          CODECOV_PATH=$(swift test --enable-swift-testing --enable-code-coverage --show-codecov-path)
-          echo "CODECOV_PATH=$CODECOV_PATH" >> $GITHUB_ENV
-          echo "COVERAGE_TYPE=spm" >> $GITHUB_ENV
+        # Report failures
+        if [ -n "$FAILED_PLATFORMS" ]; then
+          echo "⚠️  Some platforms failed:$FAILED_PLATFORMS"
+          echo "FAILED_PLATFORMS=$FAILED_PLATFORMS" >> $GITHUB_ENV
         fi
 
     - name: Process Coverage Data
@@ -289,44 +476,65 @@ runs:
       shell: bash
       working-directory: ${{ inputs.working-directory }}
       run: |
-        COVERAGE_TYPE="${{ env.COVERAGE_TYPE }}"
-        CODECOV_PATH="${{ env.CODECOV_PATH }}"
+        COVERAGE_PATHS_FILE="${{ env.COVERAGE_PATHS_FILE }}"
 
-        # Convert xcresult to SPM-compatible JSON format if needed
-        if [ "$COVERAGE_TYPE" = "xcresult" ]; then
-          echo "📊 Converting xcodebuild coverage to JSON format..."
+        # Merge all coverage data from different platforms into single SPM format
+        MERGED_COVERAGE=$(mktemp)
+        echo '{"data":[{"files":[]}]}' > "$MERGED_COVERAGE"
 
-          # Export coverage as JSON using xccov
-          COVERAGE_JSON=$(mktemp)
-          xcrun xccov view --report --json "$CODECOV_PATH" > "$COVERAGE_JSON"
+        echo "📊 Processing coverage data from all platforms..."
+        echo ""
 
-          # Transform xccov JSON to SPM format
-          # xccov format: { "targets": [{ "files": [{ "path": "...", "lineCoverage": 0.8, "coveredLines": 80, "executableLines": 100 }] }] }
-          # SPM format: { "data": [{ "files": [{ "filename": "...", "summary": { "lines": { "count": 100, "covered": 80 } } }] }] }
+        # Loop through each platform's coverage file
+        while IFS='|' read -r platform coverage_type coverage_path; do
+          echo "Processing $platform coverage ($coverage_type)..."
 
-          TRANSFORMED_JSON=$(mktemp)
-          jq '{
-            data: [{
-              files: [
-                .targets[].files[] | {
-                  filename: .path,
-                  summary: {
-                    lines: {
-                      count: .executableLines,
-                      covered: .coveredLines
+          if [ "$coverage_type" = "xcresult" ]; then
+            # Convert xcresult to SPM format
+            COVERAGE_JSON=$(mktemp)
+            xcrun xccov view --report --json "$coverage_path" > "$COVERAGE_JSON"
+
+            # Transform xccov JSON to SPM format
+            TRANSFORMED_JSON=$(mktemp)
+            jq '{
+              data: [{
+                files: [
+                  .targets[].files[] | {
+                    filename: .path,
+                    summary: {
+                      lines: {
+                        count: .executableLines,
+                        covered: .coveredLines
+                      }
                     }
                   }
-                }
-              ]
-            }]
-          }' "$COVERAGE_JSON" > "$TRANSFORMED_JSON"
+                ]
+              }]
+            }' "$COVERAGE_JSON" > "$TRANSFORMED_JSON"
 
-          # Use transformed JSON for processing
-          CODECOV_PATH="$TRANSFORMED_JSON"
+            # Merge into combined coverage
+            jq -s '{data:[{files: (.[0].data[0].files + .[1].data[0].files)}]}' \
+              "$MERGED_COVERAGE" "$TRANSFORMED_JSON" > "${MERGED_COVERAGE}.tmp"
+            mv "${MERGED_COVERAGE}.tmp" "$MERGED_COVERAGE"
 
-          echo "✅ Coverage data converted to SPM format"
-          echo ""
-        fi
+            rm -f "$COVERAGE_JSON" "$TRANSFORMED_JSON"
+
+          elif [ "$coverage_type" = "spm" ]; then
+            # Already in SPM format, just merge
+            jq -s '{data:[{files: (.[0].data[0].files + .[1].data[0].files)}]}' \
+              "$MERGED_COVERAGE" "$coverage_path" > "${MERGED_COVERAGE}.tmp"
+            mv "${MERGED_COVERAGE}.tmp" "$MERGED_COVERAGE"
+          fi
+
+          echo "✅ $platform coverage processed"
+        done < "$COVERAGE_PATHS_FILE"
+
+        # Use merged coverage for final processing
+        CODECOV_PATH="$MERGED_COVERAGE"
+
+        echo ""
+        echo "✅ All coverage data merged"
+        echo ""
 
         # Set project name and source path
         PROJECT_NAME="${{ inputs.project-name-override }}"
