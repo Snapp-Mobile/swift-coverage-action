@@ -160,25 +160,174 @@ runs:
         echo ""
         echo "platforms=$PLATFORMS_TO_TEST" >> $GITHUB_OUTPUT
 
-        # Log for visibility in Phase 1 (not used for testing yet)
+        # Log for visibility
         echo "📋 Platform detection complete"
         echo "   Platforms: $PLATFORMS_TO_TEST"
-        echo "   Note: Currently testing on macOS only (multi-platform support coming in future phases)"
         echo ""
 
     - name: Run Swift Tests with Coverage
       shell: bash
       working-directory: ${{ inputs.working-directory }}
       run: |
-        swift test --enable-swift-testing --enable-code-coverage
-        CODECOV_PATH=$(swift test --enable-swift-testing --enable-code-coverage --show-codecov-path)
-        echo "CODECOV_PATH=$CODECOV_PATH" >> $GITHUB_ENV
+        PLATFORMS="${{ steps.detect-platforms.outputs.platforms }}"
+
+        echo "🧪 Running tests for platforms: $PLATFORMS"
+        echo ""
+
+        # Check if iOS is in the platform list
+        if echo "$PLATFORMS" | grep -q "ios"; then
+          echo "📱 iOS platform detected - using xcodebuild with simulator"
+          echo ""
+
+          # Get project name for scheme
+          PROJECT_NAME="${{ inputs.project-name-override }}"
+          if [ -z "$PROJECT_NAME" ]; then
+            PROJECT_NAME="${{ github.event.repository.name }}"
+          fi
+
+          echo "Using scheme: $PROJECT_NAME"
+          echo ""
+
+          # Get the latest iOS runtime available
+          echo "🔍 Finding iOS runtime..."
+          RUNTIME=$(xcrun simctl list runtimes | grep "iOS" | grep -v "unavailable" | tail -1 | grep -oE "com\.apple\.CoreSimulator\.SimRuntime\.iOS-[0-9-]+")
+
+          if [ -z "$RUNTIME" ]; then
+            echo "❌ Error: No iOS runtime available"
+            echo "Available runtimes:"
+            xcrun simctl list runtimes
+            exit 1
+          fi
+
+          echo "✅ Using runtime: $RUNTIME"
+          echo ""
+
+          # Create iOS simulator
+          echo "📲 Creating iOS Simulator (iPhone 15)..."
+          set +e
+          SIMULATOR_ID=$(xcrun simctl create swift-coverage-test com.apple.CoreSimulator.SimDeviceType.iPhone-15 "$RUNTIME" 2>&1 | tail -1)
+          CREATE_EXIT_CODE=$?
+          set -e
+
+          if [ $CREATE_EXIT_CODE -ne 0 ]; then
+            echo "❌ Error: Failed to create iOS simulator"
+            echo "$SIMULATOR_ID"
+            exit 1
+          fi
+
+          echo "✅ Created simulator: $SIMULATOR_ID"
+          echo ""
+
+          # Boot simulator
+          echo "⏳ Booting simulator..."
+          set +e
+          xcrun simctl boot "$SIMULATOR_ID"
+          BOOT_EXIT_CODE=$?
+          set -e
+
+          if [ $BOOT_EXIT_CODE -ne 0 ]; then
+            echo "❌ Error: Failed to boot simulator"
+            xcrun simctl delete "$SIMULATOR_ID" || true
+            exit 1
+          fi
+
+          echo "✅ Simulator booted"
+          echo ""
+
+          # Wait for simulator to be ready
+          sleep 5
+
+          # Run tests with xcodebuild
+          echo "🧪 Running tests on iOS Simulator..."
+          set +e
+          xcodebuild test \
+            -scheme "$PROJECT_NAME" \
+            -destination "id=$SIMULATOR_ID" \
+            -derivedDataPath .build/ios \
+            -enableCodeCoverage YES
+          TEST_EXIT_CODE=$?
+          set -e
+
+          # Cleanup simulator
+          echo ""
+          echo "🧹 Cleaning up simulator..."
+          xcrun simctl shutdown "$SIMULATOR_ID" || true
+          xcrun simctl delete "$SIMULATOR_ID" || true
+
+          if [ $TEST_EXIT_CODE -ne 0 ]; then
+            echo "❌ Error: iOS tests failed with exit code $TEST_EXIT_CODE"
+            exit $TEST_EXIT_CODE
+          fi
+
+          echo "✅ iOS tests completed successfully"
+          echo ""
+
+          # Find coverage file (.xcresult)
+          XCRESULT=$(find .build/ios -name "*.xcresult" -type d | head -1)
+
+          if [ -z "$XCRESULT" ]; then
+            echo "⚠️  Warning: No .xcresult file found"
+            echo "CODECOV_PATH=" >> $GITHUB_ENV
+          else
+            echo "📊 Coverage data found: $XCRESULT"
+            echo "CODECOV_PATH=$XCRESULT" >> $GITHUB_ENV
+            echo "COVERAGE_TYPE=xcresult" >> $GITHUB_ENV
+          fi
+
+        else
+          echo "🖥️  macOS platform - using swift test"
+          echo ""
+
+          swift test --enable-swift-testing --enable-code-coverage
+          CODECOV_PATH=$(swift test --enable-swift-testing --enable-code-coverage --show-codecov-path)
+          echo "CODECOV_PATH=$CODECOV_PATH" >> $GITHUB_ENV
+          echo "COVERAGE_TYPE=spm" >> $GITHUB_ENV
+        fi
 
     - name: Process Coverage Data
       id: extract
       shell: bash
       working-directory: ${{ inputs.working-directory }}
       run: |
+        COVERAGE_TYPE="${{ env.COVERAGE_TYPE }}"
+        CODECOV_PATH="${{ env.CODECOV_PATH }}"
+
+        # Convert xcresult to SPM-compatible JSON format if needed
+        if [ "$COVERAGE_TYPE" = "xcresult" ]; then
+          echo "📊 Converting xcodebuild coverage to JSON format..."
+
+          # Export coverage as JSON using xccov
+          COVERAGE_JSON=$(mktemp)
+          xcrun xccov view --report --json "$CODECOV_PATH" > "$COVERAGE_JSON"
+
+          # Transform xccov JSON to SPM format
+          # xccov format: { "targets": [{ "files": [{ "path": "...", "lineCoverage": 0.8, "coveredLines": 80, "executableLines": 100 }] }] }
+          # SPM format: { "data": [{ "files": [{ "filename": "...", "summary": { "lines": { "count": 100, "covered": 80 } } }] }] }
+
+          TRANSFORMED_JSON=$(mktemp)
+          jq '{
+            data: [{
+              files: [
+                .targets[].files[] | {
+                  filename: .path,
+                  summary: {
+                    lines: {
+                      count: .executableLines,
+                      covered: .coveredLines
+                    }
+                  }
+                }
+              ]
+            }]
+          }' "$COVERAGE_JSON" > "$TRANSFORMED_JSON"
+
+          # Use transformed JSON for processing
+          CODECOV_PATH="$TRANSFORMED_JSON"
+
+          echo "✅ Coverage data converted to SPM format"
+          echo ""
+        fi
+
         # Set project name and source path
         PROJECT_NAME="${{ inputs.project-name-override }}"
         if [ -z "$PROJECT_NAME" ]; then
