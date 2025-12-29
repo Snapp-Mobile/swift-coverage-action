@@ -393,8 +393,8 @@ runs:
             xcrun xccov view --report --json "$coverage_path" > "$COVERAGE_JSON"
 
             # Debug: Show what xccov provides for coverage
-            echo "🔍 DEBUG: xccov coverage data:"
-            jq '.targets[] | select(.name | test("(Tests?|test)") | not) | {name: .name, lineCoverage: .lineCoverage, executableLines: .executableLines, coveredLines: .coveredLines, calculated: ((.coveredLines / .executableLines) * 100)}' "$COVERAGE_JSON"
+            echo "🔍 DEBUG: xccov coverage data (all metrics):"
+            jq '.targets[] | select(.name | test("(Tests?|test)") | not)' "$COVERAGE_JSON"
             echo ""
 
             # Extract and store target-level coverage metadata (for accurate percentages)
