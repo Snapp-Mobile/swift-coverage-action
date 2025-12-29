@@ -449,6 +449,7 @@ runs:
         # Create temporary files for target data
         TARGETS_DATA=$(mktemp)
         TABLE_BODY=$(mktemp)
+        COVERAGE_VALUES=$(mktemp)
         COVERAGE_SUMMARY_FILE="${{ github.workspace }}/coverage_summary.txt"
 
         # Parse files and group by target
@@ -517,7 +518,7 @@ runs:
               echo "| $target_counter | $target_name | $total_lines | **${target_coverage_rounded}%** |" >> "$TABLE_BODY"
 
               # For overall average calculation
-              echo "$target_coverage" >> /tmp/coverage_values.txt
+              echo "$target_coverage" >> "$COVERAGE_VALUES"
               total_lines_sum=$((total_lines_sum + total_lines))
               target_counter=$((target_counter + 1))
 
@@ -529,15 +530,15 @@ runs:
         fi
 
         # Calculate overall average coverage
-        if [ -f /tmp/coverage_values.txt ]; then
-          target_count=$(wc -l < /tmp/coverage_values.txt)
+        if [ -f "$COVERAGE_VALUES" ]; then
+          target_count=$(wc -l < "$COVERAGE_VALUES")
           if [ $target_count -gt 0 ]; then
-            total_coverage_sum=$(awk '{sum+=$1} END {print sum}' /tmp/coverage_values.txt)
+            total_coverage_sum=$(awk '{sum+=$1} END {print sum}' "$COVERAGE_VALUES")
             average_coverage=$(echo "scale=6; $total_coverage_sum / $target_count" | bc)
           else
             average_coverage=0
           fi
-          rm -f /tmp/coverage_values.txt
+          rm -f "$COVERAGE_VALUES"
         else
           average_coverage=0
         fi
