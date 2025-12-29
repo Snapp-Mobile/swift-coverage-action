@@ -389,13 +389,18 @@ runs:
             COVERAGE_JSON=$(mktemp)
             xcrun xccov view --report --json "$coverage_path" > "$COVERAGE_JSON"
 
-            # Transform xccov JSON to SPM format
+            # Debug: Show xccov structure
+            echo "🔍 DEBUG: xccov output structure:"
+            jq '.targets[] | {name: .name, fileCount: (.files | length)}' "$COVERAGE_JSON"
+            echo ""
+
+            # Transform xccov JSON to SPM format with target names preserved
             TRANSFORMED_JSON=$(mktemp)
             jq '{
               data: [{
                 files: [
-                  .targets[].files[] | {
-                    filename: .path,
+                  .targets[] as $target | $target.files[] | {
+                    filename: ($target.name + ":::" + .path),
                     summary: {
                       lines: {
                         count: .executableLines,
@@ -465,17 +470,19 @@ runs:
         # Parse files and group by target
         while IFS='|' read -r filename total_lines covered_lines; do
           if [ -n "$filename" ]; then
-            # Extract target name from file path patterns:
-            # Pattern 1: /path/to/TargetName/Sources/...
-            # Pattern 2: /path/to/Sources/TargetName/...
-            # Pattern 3: /path/to/TargetName/...
+            # Extract target name - check for iOS format first (TargetName:::/path/to/file.swift)
             target_name=""
 
-            if echo "$filename" | grep -q '/Sources/[^/]*/'; then
-              # Pattern: .../Sources/TargetName/...
+            if echo "$filename" | grep -q ':::'; then
+              # iOS format - extract target from prefix before :::
+              target_name=$(echo "$filename" | cut -d':' -f1)
+              # Remove prefix for later processing (not needed now, but for consistency)
+              # filename=$(echo "$filename" | sed 's/^[^:]*::://')
+            elif echo "$filename" | grep -q '/Sources/[^/]*/'; then
+              # macOS/SPM Pattern: .../Sources/TargetName/...
               target_name=$(echo "$filename" | sed -E 's|.*/Sources/([^/]+)/.*|\1|')
             elif echo "$filename" | grep -q '/Sources/[^/]*\.swift$'; then
-              # Pattern: .../Sources/file.swift (direct in Sources)
+              # macOS/SPM Pattern: .../Sources/file.swift (direct in Sources)
               target_name=$(echo "$filename" | sed -E 's|.*/Sources/([^/]*)\.swift$|\1|')
             else
               target_name="$PROJECT_NAME"
