@@ -467,6 +467,12 @@ runs:
         COVERAGE_VALUES=$(mktemp)
         COVERAGE_SUMMARY_FILE="${{ github.workspace }}/coverage_summary.txt"
 
+        # Debug: Show what files we're processing
+        echo "🔍 DEBUG: Processing files:"
+        echo "$ALL_FILES" | head -5
+        echo "Total files: $(echo "$ALL_FILES" | wc -l)"
+        echo ""
+
         # Parse files and group by target
         while IFS='|' read -r filename total_lines covered_lines; do
           if [ -n "$filename" ]; then
@@ -512,6 +518,11 @@ runs:
               print target "|" total_lines[target] "|" covered_lines[target]
             }
           }' > "$AGGREGATED_DATA"
+
+          # Debug: Show aggregated targets
+          echo "🔍 DEBUG: Aggregated targets:"
+          cat "$AGGREGATED_DATA"
+          echo ""
         fi
 
         # Generate table rows for each target
