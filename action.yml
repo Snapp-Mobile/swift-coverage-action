@@ -377,6 +377,9 @@ runs:
         MERGED_COVERAGE=$(mktemp)
         echo '{"data":[{"files":[]}]}' > "$MERGED_COVERAGE"
 
+        # Store target-level coverage metadata from xccov (for accurate percentages)
+        TARGET_COVERAGE_META=$(mktemp)
+
         echo "📊 Processing coverage data from all platforms..."
         echo ""
 
@@ -388,6 +391,9 @@ runs:
             # Convert xcresult to SPM format
             COVERAGE_JSON=$(mktemp)
             xcrun xccov view --report --json "$coverage_path" > "$COVERAGE_JSON"
+
+            # Extract and store target-level coverage metadata (for accurate percentages)
+            jq -r '.targets[] | select(.name | test("(Tests?|test)") | not) | "\(.name)|\(.lineCoverage)|\(.executableLines)"' "$COVERAGE_JSON" >> "$TARGET_COVERAGE_META"
 
             # Transform xccov JSON to SPM format with target names preserved
             TRANSFORMED_JSON=$(mktemp)
@@ -519,10 +525,28 @@ runs:
           # Process each target and add to table
           while IFS='|' read -r target_name total_lines covered_lines; do
             if [ -n "$target_name" ]; then
-              if [ $total_lines -gt 0 ]; then
-                target_coverage=$(echo "scale=6; $covered_lines * 100 / $total_lines" | bc)
+              # Check if we have xccov metadata for this target (iOS)
+              if [ -f "$TARGET_COVERAGE_META" ]; then
+                META_LINE=$(grep "^${target_name}|" "$TARGET_COVERAGE_META" | head -1)
+                if [ -n "$META_LINE" ]; then
+                  # Use xccov's pre-calculated coverage (more accurate)
+                  META_COVERAGE=$(echo "$META_LINE" | cut -d'|' -f2)
+                  target_coverage=$(echo "scale=6; $META_COVERAGE * 100" | bc)
+                else
+                  # Fallback: calculate from aggregated files (macOS/SPM)
+                  if [ $total_lines -gt 0 ]; then
+                    target_coverage=$(echo "scale=6; $covered_lines * 100 / $total_lines" | bc)
+                  else
+                    target_coverage=0
+                  fi
+                fi
               else
-                target_coverage=0
+                # No metadata file - calculate from aggregated files
+                if [ $total_lines -gt 0 ]; then
+                  target_coverage=$(echo "scale=6; $covered_lines * 100 / $total_lines" | bc)
+                else
+                  target_coverage=0
+                fi
               fi
 
               target_coverage_rounded=$(echo "$target_coverage" | awk '{print int($1 * 100 + 0.5) / 100}')
@@ -604,10 +628,25 @@ runs:
         if [ -s "$AGGREGATED_DATA" ]; then
           while IFS='|' read -r target_name total_lines covered_lines; do
             if [ -n "$target_name" ]; then
-              if [ $total_lines -gt 0 ]; then
-                target_coverage=$(echo "scale=6; $covered_lines * 100 / $total_lines" | bc)
+              # Use metadata if available (same logic as table generation)
+              if [ -f "$TARGET_COVERAGE_META" ]; then
+                META_LINE=$(grep "^${target_name}|" "$TARGET_COVERAGE_META" | head -1)
+                if [ -n "$META_LINE" ]; then
+                  META_COVERAGE=$(echo "$META_LINE" | cut -d'|' -f2)
+                  target_coverage=$(echo "scale=6; $META_COVERAGE * 100" | bc)
+                else
+                  if [ $total_lines -gt 0 ]; then
+                    target_coverage=$(echo "scale=6; $covered_lines * 100 / $total_lines" | bc)
+                  else
+                    target_coverage=0
+                  fi
+                fi
               else
-                target_coverage=0
+                if [ $total_lines -gt 0 ]; then
+                  target_coverage=$(echo "scale=6; $covered_lines * 100 / $total_lines" | bc)
+                else
+                  target_coverage=0
+                fi
               fi
               target_coverage_rounded=$(echo "$target_coverage" | awk '{print int($1 * 100 + 0.5) / 100}')
               echo "  • $target_name: ${target_coverage_rounded}%"
@@ -621,7 +660,7 @@ runs:
         echo ""
 
         # Clean up temp files
-        rm -f "$TARGETS_DATA" "$AGGREGATED_DATA"
+        rm -f "$TARGETS_DATA" "$AGGREGATED_DATA" "$TARGET_COVERAGE_META"
 
     - name: Comment on Pull Request
       if: steps.skip-check.outputs.skip != 'true' && github.event_name == 'pull_request' && inputs.post-comment == 'true'
