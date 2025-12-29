@@ -121,7 +121,22 @@ jobs:
     - name: Run Swift Tests with Coverage
       run: |
         swift test --enable-swift-testing --enable-code-coverage
-        CODECOV_PATH=$(swift test --enable-swift-testing --enable-code-coverage --show-codecov-path)
+
+        # Derive codecov path instead of running test again
+        # Path format: .build/debug/codecov/{PackageName}.json
+        PROJECT_NAME="${{ inputs.project-name-override }}"
+        if [ -z "$PROJECT_NAME" ]; then
+          PROJECT_NAME="${{ github.event.repository.name }}"
+        fi
+
+        PACKAGE_NAME=$(swift package dump-package 2>/dev/null | jq -r '.name' 2>/dev/null || echo "$PROJECT_NAME")
+        CODECOV_PATH=".build/debug/codecov/${PACKAGE_NAME}.json"
+
+        if [ ! -f "$CODECOV_PATH" ]; then
+          # Fallback: find the json file in codecov directory
+          CODECOV_PATH=$(find .build/debug/codecov -name "*.json" -type f | head -1)
+        fi
+
         echo "CODECOV_PATH=$CODECOV_PATH" >> $GITHUB_ENV
 
     - name: Process Coverage Data

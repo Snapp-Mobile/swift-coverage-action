@@ -228,7 +228,16 @@ runs:
               set -e
 
               if [ $TEST_EXIT_CODE -eq 0 ]; then
-                CODECOV_PATH=$(swift test --enable-swift-testing --enable-code-coverage --show-codecov-path)
+                # Derive codecov path instead of running test again
+                # Path format: .build/debug/codecov/{PackageName}.json
+                PACKAGE_NAME=$(swift package dump-package 2>/dev/null | jq -r '.name' 2>/dev/null || echo "$PROJECT_NAME")
+                CODECOV_PATH=".build/debug/codecov/${PACKAGE_NAME}.json"
+
+                if [ ! -f "$CODECOV_PATH" ]; then
+                  # Fallback: find the json file in codecov directory
+                  CODECOV_PATH=$(find .build/debug/codecov -name "*.json" -type f | head -1)
+                fi
+
                 echo "macos|spm|$CODECOV_PATH" >> "$COVERAGE_PATHS_FILE"
                 echo "✅ macOS tests completed successfully"
                 echo "📊 Coverage: $CODECOV_PATH"
