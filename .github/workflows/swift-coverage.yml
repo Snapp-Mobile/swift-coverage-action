@@ -142,17 +142,11 @@ jobs:
     - name: Process Coverage Data
       id: extract
       run: |
-        # Set project name and source path
+        # Set project name
         PROJECT_NAME="${{ inputs.project-name-override }}"
         if [ -z "$PROJECT_NAME" ]; then
           PROJECT_NAME="${{ github.event.repository.name }}"
         fi
-
-        SOURCE_PATH="${{ inputs.source-path-override }}"
-        if [ -z "$SOURCE_PATH" ]; then
-          SOURCE_PATH="${PROJECT_NAME}/Sources"
-        fi
-
 
         # Check if there are any actual source files to report on
         SOURCE_FILE_COUNT=$(jq -r '.data[0].files[] | select(.filename | test("/\\.build/") | not) | select(.filename | test("\\.swift$")) | select(.filename | test("/(Tests?|test)/") | not) | .filename' "$CODECOV_PATH" | wc -l)

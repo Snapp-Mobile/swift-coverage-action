@@ -16,16 +16,8 @@ tags:
 
 inputs:
   # Basic configuration
-  macos-version:
-    description: 'macOS runner version (e.g., "latest", "15", "14")'
-    required: false
-    default: 'latest'
   xcode-version:
     description: 'Xcode version to use (default: system default)'
-    required: false
-    default: ''
-  source-path-override:
-    description: 'Override source path pattern (default: {PROJECT}/Sources)'
     required: false
     default: ''
   project-name-override:
@@ -416,15 +408,10 @@ runs:
         echo "✅ All coverage data merged"
         echo ""
 
-        # Set project name and source path
+        # Set project name
         PROJECT_NAME="${{ inputs.project-name-override }}"
         if [ -z "$PROJECT_NAME" ]; then
           PROJECT_NAME="${{ github.event.repository.name }}"
-        fi
-
-        SOURCE_PATH="${{ inputs.source-path-override }}"
-        if [ -z "$SOURCE_PATH" ]; then
-          SOURCE_PATH="${PROJECT_NAME}/Sources"
         fi
 
         # Check if there are any actual source files to report on
