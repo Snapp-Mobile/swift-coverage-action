@@ -511,9 +511,6 @@ runs:
           average_coverage=0
         fi
 
-        # Clean up temp files
-        rm -f "$TARGETS_DATA" "$AGGREGATED_DATA"
-
         average_coverage_rounded=$(echo "$average_coverage" | awk '{print int($1 * 100 + 0.5) / 100}')
 
         # Determine header icon based on average coverage
@@ -578,6 +575,9 @@ runs:
           echo "  Threshold: ${THRESHOLD}%"
         fi
         echo ""
+
+        # Clean up temp files
+        rm -f "$TARGETS_DATA" "$AGGREGATED_DATA"
 
     - name: Comment on Pull Request
       if: github.event_name == 'pull_request' && inputs.post-comment == 'true'
