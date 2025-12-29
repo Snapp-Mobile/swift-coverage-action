@@ -14,6 +14,11 @@ on:
         required: false
         type: string
         default: ''
+      platforms-override:
+        description: 'Override platforms to test (reusable workflow supports macOS only)'
+        required: false
+        type: string
+        default: 'macos'
       source-path-override:
         description: 'Override source path pattern (default: {PROJECT}/Sources)'
         required: false

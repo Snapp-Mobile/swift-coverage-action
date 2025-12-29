@@ -20,6 +20,10 @@ inputs:
     description: 'Xcode version to use (default: system default)'
     required: false
     default: ''
+  platforms-override:
+    description: 'Override platforms to test (e.g., "macos", "ios", or "macos,ios"). If not set, runs single platform with priority: macOS > iOS'
+    required: false
+    default: ''
   project-name-override:
     description: 'Override project name (default: repository name)'
     required: false
@@ -133,12 +137,19 @@ runs:
         echo "🔍 Detecting platforms from Package.swift..."
         echo ""
 
-        # Check if Package.swift exists
-        if [ ! -f "Package.swift" ]; then
-          echo "⚠️  Package.swift not found in working directory"
-          echo "Defaulting to macOS platform"
-          PLATFORMS_TO_TEST="macos"
+        # Check if platforms are explicitly overridden
+        OVERRIDE_PLATFORMS="${{ inputs.platforms-override }}"
+        if [ -n "$OVERRIDE_PLATFORMS" ]; then
+          echo "✅ Using override platforms: $OVERRIDE_PLATFORMS"
+          PLATFORMS_TO_TEST="$OVERRIDE_PLATFORMS"
         else
+          # Check if Package.swift exists
+          if [ ! -f "Package.swift" ]; then
+            echo "❌ Error: Package.swift not found in working directory"
+            echo "At least macOS or iOS platform required in Package.swift"
+            exit 1
+          fi
+
           # Parse Package.swift to detect platforms
           echo "📦 Parsing Package.swift..."
 
@@ -148,24 +159,36 @@ runs:
           set -e
 
           if [ $DUMP_EXIT_CODE -ne 0 ]; then
-            echo "⚠️  Failed to parse Package.swift:"
+            echo "❌ Error: Failed to parse Package.swift:"
             echo "$PACKAGE_JSON"
-            echo ""
-            echo "Defaulting to macOS platform"
-            PLATFORMS_TO_TEST="macos"
-          else
-            # Extract platform names (lowercase)
-            DETECTED_PLATFORMS=$(echo "$PACKAGE_JSON" | jq -r '.platforms[]?.platformName // empty' | tr '\n' ',' | sed 's/,$//')
+            echo "At least macOS or iOS platform required in Package.swift"
+            exit 1
+          fi
 
-            if [ -z "$DETECTED_PLATFORMS" ]; then
-              # No platforms specified in Package.swift - default to macOS
-              PLATFORMS_TO_TEST="macos"
-              echo "ℹ️  No platforms specified in Package.swift"
-              echo "Defaulting to macOS platform"
-            else
-              PLATFORMS_TO_TEST="$DETECTED_PLATFORMS"
-              echo "✅ Detected platforms: $PLATFORMS_TO_TEST"
-            fi
+          # Extract platform names (lowercase)
+          DETECTED_PLATFORMS=$(echo "$PACKAGE_JSON" | jq -r '.platforms[]?.platformName // empty' | tr '\n' ',' | sed 's/,$//')
+
+          if [ -z "$DETECTED_PLATFORMS" ]; then
+            echo "❌ Error: No platforms specified in Package.swift"
+            echo "At least macOS or iOS platform required in Package.swift"
+            exit 1
+          fi
+
+          echo "📱 Detected platforms: $DETECTED_PLATFORMS"
+          echo ""
+
+          # Smart single-platform selection: prefer macOS, then iOS
+          if echo "$DETECTED_PLATFORMS" | grep -qi "macos"; then
+            PLATFORMS_TO_TEST="macos"
+            echo "✅ Selected platform: macOS (preferred)"
+          elif echo "$DETECTED_PLATFORMS" | grep -qi "ios"; then
+            PLATFORMS_TO_TEST="ios"
+            echo "✅ Selected platform: iOS"
+          else
+            echo "❌ Error: Neither macOS nor iOS platform found in Package.swift"
+            echo "Detected platforms: $DETECTED_PLATFORMS"
+            echo "At least macOS or iOS platform required"
+            exit 1
           fi
         fi
 
@@ -174,7 +197,7 @@ runs:
 
         # Log for visibility
         echo "📋 Platform detection complete"
-        echo "   Platforms: $PLATFORMS_TO_TEST"
+        echo "   Platforms to test: $PLATFORMS_TO_TEST"
         echo ""
 
     - name: Run Swift Tests with Coverage
