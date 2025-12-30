@@ -2,6 +2,39 @@
 
 All notable changes to this project are documented here.
 
+## [1.0.2] - 2025-12-30
+
+### Added
+- Strict error handling with `set -euo pipefail` in shell scripts
+- 10 modular helper functions for better code organization:
+  - `validate_dependencies()` - Check for required commands (jq, bc, awk)
+  - `validate_coverage_data()` - Validate coverage JSON file and structure
+  - `extract_target_from_path()` - Extract target name from file paths
+  - `calculate_coverage_percentage()` - Centralized coverage calculation
+  - `round_coverage()` - Consistent rounding to 2 decimals
+  - `create_temp_file()` - Safe temp file creation with error handling
+  - `cleanup_temp_files()` - Clean up temp files safely
+  - `generate_table_row()` - Format markdown table rows
+  - `determine_coverage_header()` - Determine header icon (✅/⚠️/Coverage)
+  - Automatic cleanup trap for temp files
+- `show_error_and_exit()` function for centralized error reporting with GitHub Actions annotations
+- Validation for CODECOV_PATH file existence
+- Error handling for jq and bc commands
+- Descriptive comments to separate script sections
+
+### Changed
+- Fail fast on undefined variables and pipe failures
+- Eliminated code duplication (coverage calculation now in single function)
+- Fixed hardcoded `/tmp/coverage_values.txt` path with proper temp file handling
+- Improved logging with validation confirmation messages
+
+### Improved
+- Better error handling with clear error messages
+- Reduced code duplication (3 instances → 1 function)
+- Improved maintainability through modular functions
+- Better testability - each function can be tested independently
+- No orphaned temp files through automatic cleanup
+
 ## [1.0.1] - 2025-11-04
 
 ### Changed
