@@ -132,9 +132,20 @@ jobs:
 
         PACKAGE_NAME=$(swift package dump-package 2>/dev/null | jq -r '.name' 2>/dev/null || echo "$PROJECT_NAME")
         CODECOV_PATH=".build/debug/codecov/${PACKAGE_NAME}.json"
-        [ ! -f "$CODECOV_PATH" ] && CODECOV_PATH=$(find .build/debug/codecov -name "*.json" -type f | head -1)
 
-        echo "CODECOV_PATH=$CODECOV_PATH" >> $GITHUB_ENV
+        if [ ! -f "$CODECOV_PATH" ]; then
+          CODECOV_PATH=$(find .build/debug/codecov -name "*.json" -type f | head -1)
+        fi
+
+        if [ -f "$CODECOV_PATH" ]; then
+          echo "CODECOV_PATH=$CODECOV_PATH" >> $GITHUB_ENV
+          echo "✅ Coverage data found: $CODECOV_PATH"
+        else
+          echo "❌ Error: No coverage data found"
+          echo "Searched in .build/debug/codecov/"
+          ls -la .build/debug/codecov/ || echo "Directory doesn't exist"
+          exit 1
+        fi
 
     - name: Process Coverage Data
       id: extract

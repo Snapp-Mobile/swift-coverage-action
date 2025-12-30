@@ -205,9 +205,19 @@ runs:
               if [ $TEST_EXIT_CODE -eq 0 ]; then
                 PACKAGE_NAME=$(swift package dump-package 2>/dev/null | jq -r '.name' 2>/dev/null || echo "$PROJECT_NAME")
                 CODECOV_PATH=".build/debug/codecov/${PACKAGE_NAME}.json"
-                [ ! -f "$CODECOV_PATH" ] && CODECOV_PATH=$(find .build/debug/codecov -name "*.json" -type f | head -1)
-                echo "macos|spm|$CODECOV_PATH" >> "$COVERAGE_PATHS_FILE"
-                echo "✅ macOS tests passed"
+
+                if [ ! -f "$CODECOV_PATH" ]; then
+                  CODECOV_PATH=$(find .build/debug/codecov -name "*.json" -type f | head -1)
+                fi
+
+                if [ -f "$CODECOV_PATH" ]; then
+                  echo "macos|spm|$CODECOV_PATH" >> "$COVERAGE_PATHS_FILE"
+                  echo "✅ macOS tests passed (coverage: $CODECOV_PATH)"
+                else
+                  echo "⚠️  macOS tests passed but no coverage data found"
+                  echo "Searched in .build/debug/codecov/"
+                  ls -la .build/debug/codecov/ || echo "Directory doesn't exist"
+                fi
               else
                 echo "❌ macOS tests failed"
                 FAILED_PLATFORMS="$FAILED_PLATFORMS macos"
@@ -294,6 +304,13 @@ runs:
       working-directory: ${{ inputs.working-directory }}
       run: |
         COVERAGE_PATHS_FILE="${{ env.COVERAGE_PATHS_FILE }}"
+
+        if [ ! -f "$COVERAGE_PATHS_FILE" ] || [ ! -s "$COVERAGE_PATHS_FILE" ]; then
+          echo "❌ Error: No coverage data found"
+          echo "Tests may have passed but coverage collection failed"
+          exit 1
+        fi
+
         MERGED_COVERAGE=$(mktemp)
         echo '{"data":[{"files":[]}]}' > "$MERGED_COVERAGE"
         TARGET_COVERAGE_META=$(mktemp)
@@ -301,6 +318,13 @@ runs:
         echo "Processing coverage data..."
 
         while IFS='|' read -r platform coverage_type coverage_path; do
+          [ -z "$coverage_path" ] && continue
+
+          if [ ! -e "$coverage_path" ]; then
+            echo "⚠️  Warning: Coverage path not found: $coverage_path"
+            continue
+          fi
+
           echo "Processing $platform coverage ($coverage_type)..."
 
           if [ "$coverage_type" = "xcresult" ]; then
