@@ -102,6 +102,9 @@ All inputs are optional with sensible defaults. Choose your preferred usage meth
     # Quality gates
     coverage-threshold: "80"           # Enables ✅/⚠️ indicators
     fail-on-low-coverage: false        # Fail if below threshold
+
+    # Debugging
+    debug: false                       # Enable verbose diagnostic output
 ```
 
 ### As Reusable Workflow
@@ -129,6 +132,9 @@ jobs:
       # Quality gates
       coverage-threshold: "80"
       fail-on-low-coverage: false
+
+      # Debugging
+      debug: false                       # Enable verbose diagnostic output
 ```
 
 ## Skipping Workflow
@@ -233,6 +239,7 @@ Each job posts a uniquely identified comment that **only deletes its own previou
 | `coverage-comment-header` | `### 🛡️ Code Coverage Report` | PR comment header |
 | `coverage-threshold` | _(empty)_ | Threshold % (enables ✅/⚠️) |
 | `fail-on-low-coverage` | `false` | Fail if below threshold |
+| `debug` | `false` | Enable verbose diagnostic output |
 
 ## Permissions
 

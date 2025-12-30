@@ -32,6 +32,9 @@ jobs:
       coverage-threshold: "80"              # Optional: e.g., "80" (leave empty to disable)
       fail-on-low-coverage: false           # Optional: fail if below threshold
 
+      # Debugging
+      # debug: true                         # Optional: enable verbose diagnostic output
+
   # Optional: Use coverage output in other jobs
   post-coverage:
     needs: coverage

@@ -64,6 +64,10 @@ inputs:
     description: 'Fail the job if coverage is below threshold'
     required: false
     default: 'false'
+  debug:
+    description: 'Enable verbose diagnostic output for troubleshooting'
+    required: false
+    default: 'false'
 
 outputs:
   coverage-percentage:
@@ -128,6 +132,9 @@ runs:
       run: |
         set -euo pipefail
 
+        # Debug flag
+        DEBUG_MODE="${{ inputs.debug }}"
+
         # ============================================================================
         # Helper Functions
         # ============================================================================
@@ -137,6 +144,21 @@ runs:
           local exit_code="${2:-1}"
           echo "::error title=Coverage Processing Error::$error_msg"
           exit "$exit_code"
+        }
+
+        debug_log() {
+          if [ "$DEBUG_MODE" = "true" ]; then
+            echo "🔍 DEBUG: $@"
+          fi
+        }
+
+        debug_section() {
+          if [ "$DEBUG_MODE" = "true" ]; then
+            echo ""
+            echo "🔍 ════════════════════════════════════════"
+            echo "🔍 $1"
+            echo "🔍 ════════════════════════════════════════"
+          fi
         }
 
         validate_dependencies() {
@@ -173,8 +195,6 @@ runs:
           if ! jq -e '.data[0].files' "$codecov_path" >/dev/null 2>&1; then
             show_error_and_exit "Invalid coverage JSON structure in: $codecov_path"
           fi
-
-          echo "✅ Coverage data validated: $codecov_path"
         }
 
         extract_target_from_path() {
@@ -294,6 +314,18 @@ runs:
         # Set coverage summary file path
         COVERAGE_SUMMARY_FILE="${{ github.workspace }}/coverage_summary.txt"
 
+        # Debug output: Configuration
+        debug_section "Configuration"
+        debug_log "Project Name: $PROJECT_NAME"
+        debug_log "Source Path Pattern: $SOURCE_PATH"
+        debug_log "Coverage Path: $CODECOV_PATH"
+        debug_log "Working Directory: ${{ inputs.working-directory }}"
+        if [ -n "$THRESHOLD" ]; then
+          debug_log "Coverage Threshold: $THRESHOLD%"
+        fi
+        debug_log "Dependencies validated: jq, bc, awk"
+        debug_log "Coverage data validated successfully"
+
         # ============================================================================
         # Extract Coverage Data
         # ============================================================================
@@ -311,6 +343,26 @@ runs:
           fi
         fi
 
+        # Debug output: Source File Detection
+        debug_section "Source File Detection"
+        debug_log "Source files found: $SOURCE_FILE_COUNT"
+
+        if [ "$DEBUG_MODE" = "true" ] && [ "$SOURCE_FILE_COUNT" -gt 0 ]; then
+          debug_log "File patterns applied:"
+          debug_log "  - Exclude: /\.build/"
+          debug_log "  - Include: \.swift$"
+          debug_log "  - Exclude: /(Tests?|test)/"
+
+          # Show first 5 files as examples
+          echo "$ALL_FILES" | head -5 | while IFS='|' read -r filename total covered; do
+            debug_log "  Found: $(basename "$filename") (Lines: $total, Covered: $covered)"
+          done
+
+          if [ "$SOURCE_FILE_COUNT" -gt 5 ]; then
+            debug_log "  ... and $((SOURCE_FILE_COUNT - 5)) more files"
+          fi
+        fi
+
         # ============================================================================
         # Process Coverage by Target
         # ============================================================================
@@ -321,10 +373,16 @@ runs:
         COVERAGE_VALUES_FILE=$(create_temp_file "coverage_values")
         TEMP_FILES+=("$TARGETS_DATA" "$TABLE_BODY" "$COVERAGE_VALUES_FILE")
 
+        # Debug output: Temporary files
+        debug_log "Created temporary files for processing"
+
         # Parse files and group by target
         while IFS='|' read -r filename total_lines covered_lines; do
           if [ -n "$filename" ]; then
             target_name=$(extract_target_from_path "$filename" "$PROJECT_NAME")
+
+            # Debug output: Target detection
+            debug_log "Processing: $(basename "$filename") → Target: $target_name"
 
             # Skip if target name looks like a test
             if echo "$target_name" | grep -qi test; then
@@ -353,6 +411,19 @@ runs:
           }' > "$AGGREGATED_DATA"; then
             show_error_and_exit "Failed to aggregate coverage data by target"
           fi
+        fi
+
+        # Debug output: Target Aggregation
+        if [ "$DEBUG_MODE" = "true" ] && [ -s "$AGGREGATED_DATA" ]; then
+          debug_section "Target Aggregation Results"
+          target_count=0
+          while IFS='|' read -r target_name total_lines covered_lines; do
+            if [ -n "$target_name" ]; then
+              target_count=$((target_count + 1))
+              debug_log "Target: $target_name (Lines: $total_lines, Covered: $covered_lines)"
+            fi
+          done < <(sort "$AGGREGATED_DATA")
+          debug_log "Total unique targets: $target_count"
         fi
 
         # ============================================================================
@@ -397,6 +468,13 @@ runs:
         fi
 
         average_coverage_rounded=$(round_coverage "$average_coverage")
+
+        # Debug output: Coverage Calculation
+        debug_section "Coverage Calculation"
+        debug_log "Average coverage: $average_coverage_rounded%"
+        if [ -n "$THRESHOLD" ]; then
+          debug_log "Threshold: $THRESHOLD%"
+        fi
 
         # ============================================================================
         # Generate Final Table

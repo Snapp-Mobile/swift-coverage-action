@@ -17,6 +17,7 @@ jobs:
       post-comment: false  # Disable individual comments
       job-name: "iOS Target"
       coverage-threshold: "80"
+      # debug: true                         # Optional: enable verbose diagnostic output
 
   coverage-macos:
     uses: Snapp-Mobile/swift-coverage-action@v1.0.2
@@ -27,6 +28,7 @@ jobs:
       post-comment: false
       job-name: "macOS Target"
       coverage-threshold: "80"
+      # debug: true                         # Optional: enable verbose diagnostic output
 
   post-combined-comment:
     if: github.event_name == 'pull_request'

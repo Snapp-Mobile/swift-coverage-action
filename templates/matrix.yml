@@ -26,3 +26,4 @@ jobs:
       coverage-comment-header: "### 📊 Coverage (Xcode ${{ matrix.xcode }}, macOS ${{ matrix.macos }})"
       job-name: "Xcode ${{ matrix.xcode }}, macOS ${{ matrix.macos }}"
       coverage-threshold: "80"
+      # debug: true                         # Optional: enable verbose diagnostic output
