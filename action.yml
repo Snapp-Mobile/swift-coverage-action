@@ -134,24 +134,16 @@ runs:
       shell: bash
       working-directory: ${{ inputs.working-directory }}
       run: |
-        echo "🔍 Detecting platforms from Package.swift..."
-        echo ""
-
-        # Check if platforms are explicitly overridden
         OVERRIDE_PLATFORMS="${{ inputs.platforms-override }}"
+
         if [ -n "$OVERRIDE_PLATFORMS" ]; then
-          echo "✅ Using override platforms: $OVERRIDE_PLATFORMS"
           PLATFORMS_TO_TEST="$OVERRIDE_PLATFORMS"
+          echo "Using override platforms: $PLATFORMS_TO_TEST"
         else
-          # Check if Package.swift exists
           if [ ! -f "Package.swift" ]; then
-            echo "❌ Error: Package.swift not found in working directory"
-            echo "At least macOS or iOS platform required in Package.swift"
+            echo "❌ Package.swift not found. At least macOS or iOS platform required."
             exit 1
           fi
-
-          # Parse Package.swift to detect platforms
-          echo "📦 Parsing Package.swift..."
 
           set +e
           PACKAGE_JSON=$(swift package dump-package 2>&1)
@@ -159,46 +151,30 @@ runs:
           set -e
 
           if [ $DUMP_EXIT_CODE -ne 0 ]; then
-            echo "❌ Error: Failed to parse Package.swift:"
-            echo "$PACKAGE_JSON"
-            echo "At least macOS or iOS platform required in Package.swift"
+            echo "❌ Failed to parse Package.swift. At least macOS or iOS platform required."
             exit 1
           fi
 
-          # Extract platform names (lowercase)
           DETECTED_PLATFORMS=$(echo "$PACKAGE_JSON" | jq -r '.platforms[]?.platformName // empty' | tr '\n' ',' | sed 's/,$//')
 
           if [ -z "$DETECTED_PLATFORMS" ]; then
-            echo "❌ Error: No platforms specified in Package.swift"
-            echo "At least macOS or iOS platform required in Package.swift"
+            echo "❌ No platforms specified in Package.swift. At least macOS or iOS platform required."
             exit 1
           fi
 
-          echo "📱 Detected platforms: $DETECTED_PLATFORMS"
-          echo ""
-
-          # Smart single-platform selection: prefer macOS, then iOS
           if echo "$DETECTED_PLATFORMS" | grep -qi "macos"; then
             PLATFORMS_TO_TEST="macos"
-            echo "✅ Selected platform: macOS (preferred)"
           elif echo "$DETECTED_PLATFORMS" | grep -qi "ios"; then
             PLATFORMS_TO_TEST="ios"
-            echo "✅ Selected platform: iOS"
           else
-            echo "❌ Error: Neither macOS nor iOS platform found in Package.swift"
-            echo "Detected platforms: $DETECTED_PLATFORMS"
-            echo "At least macOS or iOS platform required"
+            echo "❌ Neither macOS nor iOS found. Detected: $DETECTED_PLATFORMS"
             exit 1
           fi
+
+          echo "Detected: $DETECTED_PLATFORMS, selected: $PLATFORMS_TO_TEST"
         fi
 
-        echo ""
         echo "platforms=$PLATFORMS_TO_TEST" >> $GITHUB_OUTPUT
-
-        # Log for visibility
-        echo "📋 Platform detection complete"
-        echo "   Platforms to test: $PLATFORMS_TO_TEST"
-        echo ""
 
     - name: Run Swift Tests with Coverage
       if: steps.skip-check.outputs.skip != 'true'
@@ -206,113 +182,72 @@ runs:
       working-directory: ${{ inputs.working-directory }}
       run: |
         PLATFORMS="${{ steps.detect-platforms.outputs.platforms }}"
-
-        echo "🧪 Running tests for platforms: $PLATFORMS"
-        echo ""
-
-        # Get project name for scheme (used by xcodebuild)
         PROJECT_NAME="${{ inputs.project-name-override }}"
         if [ -z "$PROJECT_NAME" ]; then
           PROJECT_NAME="${{ github.event.repository.name }}"
         fi
 
-        # Create temp file to store coverage paths from all platforms
         COVERAGE_PATHS_FILE=$(mktemp)
         FAILED_PLATFORMS=""
-
-        # Split platforms by comma and loop
         IFS=',' read -ra PLATFORM_ARRAY <<< "$PLATFORMS"
 
         for platform in "${PLATFORM_ARRAY[@]}"; do
-          # Trim whitespace
           platform=$(echo "$platform" | xargs)
-
-          echo "========================================"
-          echo "Testing platform: $platform"
-          echo "========================================"
-          echo ""
+          echo "Testing $platform..."
 
           case "$platform" in
             macos)
-              echo "🖥️  macOS platform - using swift test"
-              echo ""
-
               set +e
               swift test --enable-swift-testing --enable-code-coverage
               TEST_EXIT_CODE=$?
               set -e
 
               if [ $TEST_EXIT_CODE -eq 0 ]; then
-                # Derive codecov path instead of running test again
-                # Path format: .build/debug/codecov/{PackageName}.json
                 PACKAGE_NAME=$(swift package dump-package 2>/dev/null | jq -r '.name' 2>/dev/null || echo "$PROJECT_NAME")
                 CODECOV_PATH=".build/debug/codecov/${PACKAGE_NAME}.json"
-
-                if [ ! -f "$CODECOV_PATH" ]; then
-                  # Fallback: find the json file in codecov directory
-                  CODECOV_PATH=$(find .build/debug/codecov -name "*.json" -type f | head -1)
-                fi
-
+                [ ! -f "$CODECOV_PATH" ] && CODECOV_PATH=$(find .build/debug/codecov -name "*.json" -type f | head -1)
                 echo "macos|spm|$CODECOV_PATH" >> "$COVERAGE_PATHS_FILE"
-                echo "✅ macOS tests completed successfully"
-                echo "📊 Coverage: $CODECOV_PATH"
+                echo "✅ macOS tests passed"
               else
-                echo "❌ Error: macOS tests failed with exit code $TEST_EXIT_CODE"
+                echo "❌ macOS tests failed"
                 FAILED_PLATFORMS="$FAILED_PLATFORMS macos"
               fi
               ;;
 
             ios)
-              echo "📱 iOS platform - using xcodebuild with simulator"
-              echo ""
-
-              # Get the latest iOS runtime
-              echo "🔍 Finding iOS runtime..."
               RUNTIME=$(xcrun simctl list runtimes | grep "iOS" | grep -v "unavailable" | tail -1 | grep -oE "com\.apple\.CoreSimulator\.SimRuntime\.iOS-[0-9-]+")
 
               if [ -z "$RUNTIME" ]; then
-                echo "❌ Error: No iOS runtime available"
-                xcrun simctl list runtimes
+                echo "❌ No iOS runtime available"
                 FAILED_PLATFORMS="$FAILED_PLATFORMS ios"
                 continue
               fi
 
-              echo "✅ Using runtime: $RUNTIME"
-
-              # Create iOS simulator
-              echo "📲 Creating iOS Simulator (iPhone 15)..."
               set +e
               SIMULATOR_ID=$(xcrun simctl create swift-coverage-ios com.apple.CoreSimulator.SimDeviceType.iPhone-15 "$RUNTIME" 2>&1 | tail -1)
               CREATE_EXIT_CODE=$?
               set -e
 
               if [ $CREATE_EXIT_CODE -ne 0 ]; then
-                echo "❌ Error: Failed to create iOS simulator"
+                echo "❌ Failed to create iOS simulator"
                 FAILED_PLATFORMS="$FAILED_PLATFORMS ios"
                 continue
               fi
 
-              echo "✅ Created simulator: $SIMULATOR_ID"
-
-              # Boot simulator
-              echo "⏳ Booting simulator..."
               set +e
               xcrun simctl boot "$SIMULATOR_ID"
               BOOT_EXIT_CODE=$?
               set -e
 
               if [ $BOOT_EXIT_CODE -ne 0 ]; then
-                echo "❌ Error: Failed to boot simulator"
+                echo "❌ Failed to boot simulator"
                 xcrun simctl delete "$SIMULATOR_ID" || true
                 FAILED_PLATFORMS="$FAILED_PLATFORMS ios"
                 continue
               fi
 
-              echo "✅ Simulator booted, waiting for ready state..."
               sleep 5
 
-              # Run tests
-              echo "🧪 Running tests on iOS Simulator..."
               set +e
               xcodebuild test \
                 -scheme "$PROJECT_NAME" \
@@ -322,8 +257,6 @@ runs:
               TEST_EXIT_CODE=$?
               set -e
 
-              # Cleanup simulator
-              echo "🧹 Cleaning up simulator..."
               xcrun simctl shutdown "$SIMULATOR_ID" || true
               xcrun simctl delete "$SIMULATOR_ID" || true
 
@@ -331,39 +264,28 @@ runs:
                 XCRESULT=$(find .build/ios -name "*.xcresult" -type d | head -1)
                 if [ -n "$XCRESULT" ]; then
                   echo "ios|xcresult|$XCRESULT" >> "$COVERAGE_PATHS_FILE"
-                  echo "✅ iOS tests completed successfully"
-                  echo "📊 Coverage: $XCRESULT"
+                  echo "✅ iOS tests passed"
                 else
-                  echo "⚠️  Warning: No coverage data found"
+                  echo "⚠️  No coverage data found"
                 fi
               else
-                echo "❌ Error: iOS tests failed with exit code $TEST_EXIT_CODE"
+                echo "❌ iOS tests failed"
                 FAILED_PLATFORMS="$FAILED_PLATFORMS ios"
               fi
               ;;
 
             tvos|watchos|visionos)
-              echo "⏭️  Skipping $platform platform"
-              echo "   Only iOS and macOS platforms are currently supported for testing"
-              echo "   Detected platform will be ignored"
+              echo "⏭️  Skipping $platform (not supported)"
               ;;
 
             *)
-              echo "⚠️  Warning: Unsupported platform: $platform"
+              echo "⚠️  Unknown platform: $platform"
               ;;
           esac
-
-          echo ""
         done
 
-        # Save coverage paths file for processing
         echo "COVERAGE_PATHS_FILE=$COVERAGE_PATHS_FILE" >> $GITHUB_ENV
-
-        # Report failures
-        if [ -n "$FAILED_PLATFORMS" ]; then
-          echo "⚠️  Some platforms failed:$FAILED_PLATFORMS"
-          echo "FAILED_PLATFORMS=$FAILED_PLATFORMS" >> $GITHUB_ENV
-        fi
+        [ -n "$FAILED_PLATFORMS" ] && echo "FAILED_PLATFORMS=$FAILED_PLATFORMS" >> $GITHUB_ENV
 
     - name: Process Coverage Data
       if: steps.skip-check.outputs.skip != 'true'
@@ -372,35 +294,21 @@ runs:
       working-directory: ${{ inputs.working-directory }}
       run: |
         COVERAGE_PATHS_FILE="${{ env.COVERAGE_PATHS_FILE }}"
-
-        # Merge all coverage data from different platforms into single SPM format
         MERGED_COVERAGE=$(mktemp)
         echo '{"data":[{"files":[]}]}' > "$MERGED_COVERAGE"
-
-        # Store target-level coverage metadata from xccov (for accurate percentages)
         TARGET_COVERAGE_META=$(mktemp)
 
-        echo "📊 Processing coverage data from all platforms..."
-        echo ""
+        echo "Processing coverage data..."
 
-        # Loop through each platform's coverage file
         while IFS='|' read -r platform coverage_type coverage_path; do
           echo "Processing $platform coverage ($coverage_type)..."
 
           if [ "$coverage_type" = "xcresult" ]; then
-            # Convert xcresult to SPM format
             COVERAGE_JSON=$(mktemp)
             xcrun xccov view --report --json "$coverage_path" > "$COVERAGE_JSON"
 
-            # Debug: Show what xccov provides for coverage
-            echo "🔍 DEBUG: xccov coverage data (all metrics):"
-            jq '.targets[] | select(.name | test("(Tests?|test)") | not)' "$COVERAGE_JSON"
-            echo ""
-
-            # Extract and store target-level coverage metadata (for accurate percentages)
             jq -r '.targets[] | select(.name | test("(Tests?|test)") | not) | "\(.name)|\(.lineCoverage)|\(.executableLines)"' "$COVERAGE_JSON" >> "$TARGET_COVERAGE_META"
 
-            # Transform xccov JSON to SPM format with target names preserved
             TRANSFORMED_JSON=$(mktemp)
             jq '{
               data: [{
@@ -418,93 +326,57 @@ runs:
               }]
             }' "$COVERAGE_JSON" > "$TRANSFORMED_JSON"
 
-            # Merge into combined coverage
             jq -s '{data:[{files: (.[0].data[0].files + .[1].data[0].files)}]}' \
               "$MERGED_COVERAGE" "$TRANSFORMED_JSON" > "${MERGED_COVERAGE}.tmp"
             mv "${MERGED_COVERAGE}.tmp" "$MERGED_COVERAGE"
-
             rm -f "$COVERAGE_JSON" "$TRANSFORMED_JSON"
 
           elif [ "$coverage_type" = "spm" ]; then
-            # Already in SPM format, just merge
             jq -s '{data:[{files: (.[0].data[0].files + .[1].data[0].files)}]}' \
               "$MERGED_COVERAGE" "$coverage_path" > "${MERGED_COVERAGE}.tmp"
             mv "${MERGED_COVERAGE}.tmp" "$MERGED_COVERAGE"
           fi
-
-          echo "✅ $platform coverage processed"
         done < "$COVERAGE_PATHS_FILE"
 
-        # Use merged coverage for final processing
         CODECOV_PATH="$MERGED_COVERAGE"
-
-        echo ""
-        echo "✅ All coverage data merged"
-        echo ""
-
-        # Set project name
         PROJECT_NAME="${{ inputs.project-name-override }}"
-        if [ -z "$PROJECT_NAME" ]; then
-          PROJECT_NAME="${{ github.event.repository.name }}"
-        fi
+        [ -z "$PROJECT_NAME" ] && PROJECT_NAME="${{ github.event.repository.name }}"
 
-        # Check if there are any actual source files to report on
         SOURCE_FILE_COUNT=$(jq -r '.data[0].files[] | select(.filename | test("/\\.build/") | not) | select(.filename | test("\\.swift$")) | select(.filename | test("/(Tests?|test)/") | not) | .filename' "$CODECOV_PATH" | wc -l)
 
         if [ "$SOURCE_FILE_COUNT" -eq 0 ]; then
-          # Create a placeholder entry when no source files exist
           ALL_FILES="$PROJECT_NAME|0|0"
         else
-          # Extract all Swift files excluding build artifacts
           ALL_FILES=$(jq -r '.data[0].files[] | select(.filename | test("/\\.build/") | not) | select(.filename | test("\\.swift$")) | select(.filename | test("/(Tests?|test)/") | not) | "\(.filename)|\(.summary.lines.count)|\(.summary.lines.covered)"' "$CODECOV_PATH")
         fi
 
-        # Initialize - check if threshold is set
         THRESHOLD="${{ inputs.coverage-threshold }}"
-        if [ -n "$THRESHOLD" ]; then
-          show_quality="true"
-        else
-          show_quality="false"
-        fi
+        [ -n "$THRESHOLD" ] && show_quality="true" || show_quality="false"
 
-        # Create temporary files for target data
         TARGETS_DATA=$(mktemp)
         TABLE_BODY=$(mktemp)
         COVERAGE_VALUES=$(mktemp)
         COVERAGE_SUMMARY_FILE="${{ github.workspace }}/coverage_summary.txt"
 
-        # Parse files and group by target
         while IFS='|' read -r filename total_lines covered_lines; do
           if [ -n "$filename" ]; then
-            # Extract target name - check for iOS format first (TargetName:::/path/to/file.swift)
             target_name=""
 
             if echo "$filename" | grep -q ':::'; then
-              # iOS format - extract target from prefix before :::
               target_name=$(echo "$filename" | cut -d':' -f1)
-              # Remove prefix for later processing (not needed now, but for consistency)
-              # filename=$(echo "$filename" | sed 's/^[^:]*::://')
             elif echo "$filename" | grep -q '/Sources/[^/]*/'; then
-              # macOS/SPM Pattern: .../Sources/TargetName/...
               target_name=$(echo "$filename" | sed -E 's|.*/Sources/([^/]+)/.*|\1|')
             elif echo "$filename" | grep -q '/Sources/[^/]*\.swift$'; then
-              # macOS/SPM Pattern: .../Sources/file.swift (direct in Sources)
               target_name=$(echo "$filename" | sed -E 's|.*/Sources/([^/]*)\.swift$|\1|')
             else
               target_name="$PROJECT_NAME"
             fi
 
-            # Skip if target name looks like a test
-            if echo "$target_name" | grep -qi test; then
-              continue
-            fi
-
-            # Write target data to temp file
+            echo "$target_name" | grep -qi test && continue
             echo "$target_name|$total_lines|$covered_lines" >> "$TARGETS_DATA"
           fi
         done <<< "$ALL_FILES"
 
-        # Aggregate data by target
         AGGREGATED_DATA=$(mktemp)
         if [ -s "$TARGETS_DATA" ]; then
           sort "$TARGETS_DATA" | awk -F'|' '
@@ -520,57 +392,37 @@ runs:
           }' > "$AGGREGATED_DATA"
         fi
 
-        # Generate table rows for each target
         target_counter=1
         total_coverage_sum=0
         target_count=0
         total_lines_sum=0
 
         if [ -s "$AGGREGATED_DATA" ]; then
-          # Process each target and add to table
           while IFS='|' read -r target_name total_lines covered_lines; do
             if [ -n "$target_name" ]; then
-              # Check if we have xccov metadata for this target (iOS)
               if [ -f "$TARGET_COVERAGE_META" ]; then
                 META_LINE=$(grep "^${target_name}|" "$TARGET_COVERAGE_META" | head -1)
                 if [ -n "$META_LINE" ]; then
-                  # Use xccov's pre-calculated coverage (more accurate)
                   META_COVERAGE=$(echo "$META_LINE" | cut -d'|' -f2)
                   target_coverage=$(echo "scale=6; $META_COVERAGE * 100" | bc)
                 else
-                  # Fallback: calculate from aggregated files (macOS/SPM)
-                  if [ $total_lines -gt 0 ]; then
-                    target_coverage=$(echo "scale=6; $covered_lines * 100 / $total_lines" | bc)
-                  else
-                    target_coverage=0
-                  fi
+                  [ $total_lines -gt 0 ] && target_coverage=$(echo "scale=6; $covered_lines * 100 / $total_lines" | bc) || target_coverage=0
                 fi
               else
-                # No metadata file - calculate from aggregated files
-                if [ $total_lines -gt 0 ]; then
-                  target_coverage=$(echo "scale=6; $covered_lines * 100 / $total_lines" | bc)
-                else
-                  target_coverage=0
-                fi
+                [ $total_lines -gt 0 ] && target_coverage=$(echo "scale=6; $covered_lines * 100 / $total_lines" | bc) || target_coverage=0
               fi
 
               target_coverage_rounded=$(echo "$target_coverage" | awk '{print int($1 * 100 + 0.5) / 100}')
-
               echo "| $target_counter | $target_name | $total_lines | **${target_coverage_rounded}%** |" >> "$TABLE_BODY"
-
-              # For overall average calculation
               echo "$target_coverage" >> "$COVERAGE_VALUES"
               total_lines_sum=$((total_lines_sum + total_lines))
               target_counter=$((target_counter + 1))
-
             fi
           done < <(sort "$AGGREGATED_DATA")
         else
-          # Fallback: add a single entry with project name
           echo "| 1 | $PROJECT_NAME | 0 | **0%** |" >> "$TABLE_BODY"
         fi
 
-        # Calculate overall average coverage
         if [ -f "$COVERAGE_VALUES" ]; then
           target_count=$(wc -l < "$COVERAGE_VALUES")
           if [ $target_count -gt 0 ]; then
@@ -586,72 +438,42 @@ runs:
 
         average_coverage_rounded=$(echo "$average_coverage" | awk '{print int($1 * 100 + 0.5) / 100}')
 
-        # Determine header icon based on average coverage
         coverage_header="Coverage"
         if [ "$show_quality" = "true" ]; then
           coverage_int=$(echo "$average_coverage_rounded" | awk '{print int($1)}')
-          if [ "$coverage_int" -lt "$THRESHOLD" ]; then
-            coverage_header="⚠️"
-          else
-            coverage_header="✅"
-          fi
+          [ "$coverage_int" -lt "$THRESHOLD" ] && coverage_header="⚠️" || coverage_header="✅"
         fi
 
-        # Write final table with header + body
         cat <<EOF > "$COVERAGE_SUMMARY_FILE"
         |   №  | Target | Lines | $coverage_header |
         |:----:|--------|------:|:---------:|
         EOF
         cat "$TABLE_BODY" >> "$COVERAGE_SUMMARY_FILE"
 
-        # Add average/combined coverage row if multiple targets
-        if [ $target_count -gt 1 ]; then
-          echo "| | <p align=\"right\">**Total**</p> | $total_lines_sum | **${average_coverage_rounded}%** |" >> "$COVERAGE_SUMMARY_FILE"
-        fi
+        [ $target_count -gt 1 ] && echo "| | <p align=\"right\">**Total**</p> | $total_lines_sum | **${average_coverage_rounded}%** |" >> "$COVERAGE_SUMMARY_FILE"
 
-        # Clean up temp files
         rm -f "$TABLE_BODY"
-
-        # Output for next steps
         echo "coverage=$average_coverage_rounded" >> $GITHUB_OUTPUT
-
-        # Output table for combined comments
         echo "coverage-table<<EOF" >> $GITHUB_OUTPUT
         cat "$COVERAGE_SUMMARY_FILE" >> $GITHUB_OUTPUT
         echo "EOF" >> $GITHUB_OUTPUT
+        [ -n "$THRESHOLD" ] && echo "threshold=$THRESHOLD" >> $GITHUB_OUTPUT || echo "threshold=" >> $GITHUB_OUTPUT
 
-        # Output threshold for comment footer (if set)
-        if [ -n "$THRESHOLD" ]; then
-          echo "threshold=$THRESHOLD" >> $GITHUB_OUTPUT
-        else
-          echo "threshold=" >> $GITHUB_OUTPUT
-        fi
-
-        # Echo coverage summary to logs (visible for all workflows: PR, direct push, etc.)
         echo ""
         echo "📊 Coverage Summary:"
         if [ -s "$AGGREGATED_DATA" ]; then
           while IFS='|' read -r target_name total_lines covered_lines; do
             if [ -n "$target_name" ]; then
-              # Use metadata if available (same logic as table generation)
               if [ -f "$TARGET_COVERAGE_META" ]; then
                 META_LINE=$(grep "^${target_name}|" "$TARGET_COVERAGE_META" | head -1)
                 if [ -n "$META_LINE" ]; then
                   META_COVERAGE=$(echo "$META_LINE" | cut -d'|' -f2)
                   target_coverage=$(echo "scale=6; $META_COVERAGE * 100" | bc)
                 else
-                  if [ $total_lines -gt 0 ]; then
-                    target_coverage=$(echo "scale=6; $covered_lines * 100 / $total_lines" | bc)
-                  else
-                    target_coverage=0
-                  fi
+                  [ $total_lines -gt 0 ] && target_coverage=$(echo "scale=6; $covered_lines * 100 / $total_lines" | bc) || target_coverage=0
                 fi
               else
-                if [ $total_lines -gt 0 ]; then
-                  target_coverage=$(echo "scale=6; $covered_lines * 100 / $total_lines" | bc)
-                else
-                  target_coverage=0
-                fi
+                [ $total_lines -gt 0 ] && target_coverage=$(echo "scale=6; $covered_lines * 100 / $total_lines" | bc) || target_coverage=0
               fi
               target_coverage_rounded=$(echo "$target_coverage" | awk '{print int($1 * 100 + 0.5) / 100}')
               echo "  • $target_name: ${target_coverage_rounded}%"
@@ -659,12 +481,9 @@ runs:
           done < <(sort "$AGGREGATED_DATA")
         fi
         echo "  Overall: ${average_coverage_rounded}%"
-        if [ -n "$THRESHOLD" ]; then
-          echo "  Threshold: ${THRESHOLD}%"
-        fi
+        [ -n "$THRESHOLD" ] && echo "  Threshold: ${THRESHOLD}%"
         echo ""
 
-        # Clean up temp files
         rm -f "$TARGETS_DATA" "$AGGREGATED_DATA" "$TARGET_COVERAGE_META"
 
     - name: Comment on Pull Request
