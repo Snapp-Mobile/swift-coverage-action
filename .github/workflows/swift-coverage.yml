@@ -142,12 +142,42 @@ jobs:
         PROJECT_NAME="${{ inputs.project-name-override }}"
         [ -z "$PROJECT_NAME" ] && PROJECT_NAME="${{ github.event.repository.name }}"
 
-        SOURCE_FILE_COUNT=$(jq -r '.data[0].files[] | select(.filename | test("/\\.build/") | not) | select(.filename | test("\\.swift$")) | select(.filename | test("/(Tests?|test)/") | not) | .filename' "$CODECOV_PATH" | wc -l)
+        if [ ! -f "$CODECOV_PATH" ]; then
+          echo "❌ Error: Coverage file not found at $CODECOV_PATH"
+          exit 1
+        fi
+
+        echo "Processing coverage from: $CODECOV_PATH"
+
+        set +e
+        SOURCE_FILES=$(jq -r '.data[0].files[] | select(.filename | test("/\\.build/") | not) | select(.filename | test("\\.swift$")) | select(.filename | test("/(Tests?|test)/") | not) | .filename' "$CODECOV_PATH" 2>&1)
+        jq_exit_code=$?
+        set -e
+
+        if [ $jq_exit_code -ne 0 ]; then
+          echo "❌ Error: Failed to parse coverage JSON (exit code: $jq_exit_code)"
+          echo "jq output: $SOURCE_FILES"
+          echo ""
+          echo "Coverage file content (first 30 lines):"
+          head -30 "$CODECOV_PATH"
+          exit 1
+        fi
+
+        SOURCE_FILE_COUNT=$(echo "$SOURCE_FILES" | grep -c . || echo "0")
 
         if [ "$SOURCE_FILE_COUNT" -eq 0 ]; then
           ALL_FILES="$PROJECT_NAME|0|0"
         else
-          ALL_FILES=$(jq -r '.data[0].files[] | select(.filename | test("/\\.build/") | not) | select(.filename | test("\\.swift$")) | select(.filename | test("/(Tests?|test)/") | not) | "\(.filename)|\(.summary.lines.count)|\(.summary.lines.covered)"' "$CODECOV_PATH")
+          set +e
+          ALL_FILES=$(jq -r '.data[0].files[] | select(.filename | test("/\\.build/") | not) | select(.filename | test("\\.swift$")) | select(.filename | test("/(Tests?|test)/") | not) | "\(.filename)|\(.summary.lines.count)|\(.summary.lines.covered)"' "$CODECOV_PATH" 2>&1)
+          jq_exit_code=$?
+          set -e
+
+          if [ $jq_exit_code -ne 0 ]; then
+            echo "❌ Error: Failed to extract coverage data (exit code: $jq_exit_code)"
+            echo "jq output: $ALL_FILES"
+            exit 1
+          fi
         fi
 
         THRESHOLD="${{ inputs.coverage-threshold }}"
