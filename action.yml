@@ -477,16 +477,20 @@ runs:
           echo "| 1 | $PROJECT_NAME | 0 | **0%** |" >> "$TABLE_BODY"
         fi
 
+        echo "Calculating average coverage..."
         if [ -f "$COVERAGE_VALUES" ]; then
           target_count=$(wc -l < "$COVERAGE_VALUES")
+          echo "Found $target_count targets in coverage values file"
           if [ $target_count -gt 0 ]; then
             total_coverage_sum=$(awk '{sum+=$1} END {print sum}' "$COVERAGE_VALUES")
             average_coverage=$(echo "scale=6; $total_coverage_sum / $target_count" | bc)
           else
+            echo "No targets found, setting coverage to 0"
             average_coverage=0
           fi
           rm -f "$COVERAGE_VALUES"
         else
+          echo "Coverage values file not found, setting coverage to 0"
           average_coverage=0
         fi
 
