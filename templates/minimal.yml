@@ -11,4 +11,4 @@ on:
 
 jobs:
   coverage:
-    uses: Snapp-Mobile/swift-coverage-action@latest
+    uses: Snapp-Mobile/swift-coverage-action@v1.0.2

@@ -52,7 +52,7 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: Snapp-Mobile/swift-coverage-action@v1.0.1
+      - uses: Snapp-Mobile/swift-coverage-action@v1.0.2
 ```
 
 ### As a Reusable Workflow
@@ -82,7 +82,7 @@ All inputs are optional with sensible defaults. Choose your preferred usage meth
 ### As GitHub Marketplace Action
 
 ```yaml
-- uses: Snapp-Mobile/swift-coverage-action@v1.0.1
+- uses: Snapp-Mobile/swift-coverage-action@v1.0.2
   with:
     # Environment
     macos-version: "latest"            # "latest", "15", "14", etc.

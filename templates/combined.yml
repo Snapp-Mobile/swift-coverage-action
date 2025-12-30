@@ -10,7 +10,7 @@ on:
 
 jobs:
   coverage-ios:
-    uses: Snapp-Mobile/swift-coverage-action@latest
+    uses: Snapp-Mobile/swift-coverage-action@v1.0.2
     with:
       macos-version: "15"
       xcode-version: "16.1"
@@ -19,7 +19,7 @@ jobs:
       coverage-threshold: "80"
 
   coverage-macos:
-    uses: Snapp-Mobile/swift-coverage-action@latest
+    uses: Snapp-Mobile/swift-coverage-action@v1.0.2
     with:
       macos-version: "15"
       xcode-version: "16.1"
