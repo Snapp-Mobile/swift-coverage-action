@@ -187,7 +187,7 @@ runs:
           PROJECT_NAME="${{ github.event.repository.name }}"
         fi
 
-        COVERAGE_PATHS_FILE=$(mktemp)
+        COVERAGE_PATHS_FILE="${{ github.workspace }}/coverage_paths.txt"
         FAILED_PLATFORMS=""
         IFS=',' read -ra PLATFORM_ARRAY <<< "$PLATFORMS"
 
@@ -538,7 +538,7 @@ runs:
         [ -n "$THRESHOLD" ] && echo "  Threshold: ${THRESHOLD}%"
         echo ""
 
-        rm -f "$TARGETS_DATA" "$AGGREGATED_DATA" "$TARGET_COVERAGE_META"
+        rm -f "$TARGETS_DATA" "$AGGREGATED_DATA" "$TARGET_COVERAGE_META" "$MERGED_COVERAGE" "${{ github.workspace }}/coverage_paths.txt"
 
     - name: Comment on Pull Request
       if: steps.skip-check.outputs.skip != 'true' && github.event_name == 'pull_request' && inputs.post-comment == 'true'
