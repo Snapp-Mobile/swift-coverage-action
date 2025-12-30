@@ -303,29 +303,42 @@ runs:
       shell: bash
       working-directory: ${{ inputs.working-directory }}
       run: |
+        echo "=== Starting Coverage Processing ==="
         COVERAGE_PATHS_FILE="${{ env.COVERAGE_PATHS_FILE }}"
+        echo "Coverage paths file: $COVERAGE_PATHS_FILE"
 
-        if [ ! -f "$COVERAGE_PATHS_FILE" ] || [ ! -s "$COVERAGE_PATHS_FILE" ]; then
-          echo "❌ Error: No coverage data found"
-          echo "Tests may have passed but coverage collection failed"
+        if [ ! -f "$COVERAGE_PATHS_FILE" ]; then
+          echo "❌ Error: Coverage paths file does not exist"
           exit 1
         fi
+
+        if [ ! -s "$COVERAGE_PATHS_FILE" ]; then
+          echo "❌ Error: Coverage paths file is empty"
+          cat "$COVERAGE_PATHS_FILE"
+          exit 1
+        fi
+
+        echo "Coverage paths file content:"
+        cat "$COVERAGE_PATHS_FILE"
+        echo ""
 
         MERGED_COVERAGE=$(mktemp)
         echo '{"data":[{"files":[]}]}' > "$MERGED_COVERAGE"
         TARGET_COVERAGE_META=$(mktemp)
 
-        echo "Processing coverage data..."
+        echo "Merging coverage data from all platforms..."
 
         while IFS='|' read -r platform coverage_type coverage_path; do
-          [ -z "$coverage_path" ] && continue
+          echo "Read line: platform='$platform' type='$coverage_type' path='$coverage_path'"
+
+          [ -z "$coverage_path" ] && { echo "Skipping empty coverage path"; continue; }
 
           if [ ! -e "$coverage_path" ]; then
             echo "⚠️  Warning: Coverage path not found: $coverage_path"
             continue
           fi
 
-          echo "Processing $platform coverage ($coverage_type)..."
+          echo "Processing $platform coverage ($coverage_type) from $coverage_path"
 
           if [ "$coverage_type" = "xcresult" ]; then
             COVERAGE_JSON=$(mktemp)
@@ -356,23 +369,31 @@ runs:
             rm -f "$COVERAGE_JSON" "$TRANSFORMED_JSON"
 
           elif [ "$coverage_type" = "spm" ]; then
+            echo "Merging SPM coverage data..."
             jq -s '{data:[{files: (.[0].data[0].files + .[1].data[0].files)}]}' \
               "$MERGED_COVERAGE" "$coverage_path" > "${MERGED_COVERAGE}.tmp"
             mv "${MERGED_COVERAGE}.tmp" "$MERGED_COVERAGE"
+            echo "SPM coverage merged successfully"
           fi
         done < "$COVERAGE_PATHS_FILE"
+
+        echo "✅ Coverage merge complete"
+        echo ""
 
         CODECOV_PATH="$MERGED_COVERAGE"
         PROJECT_NAME="${{ inputs.project-name-override }}"
         [ -z "$PROJECT_NAME" ] && PROJECT_NAME="${{ github.event.repository.name }}"
+
+        echo "=== Extracting Coverage Data ==="
+        echo "Coverage file: $CODECOV_PATH"
+        echo "Project name: $PROJECT_NAME"
 
         if [ ! -f "$CODECOV_PATH" ]; then
           echo "❌ Error: Coverage file not found at $CODECOV_PATH"
           exit 1
         fi
 
-        echo "Processing coverage from: $CODECOV_PATH"
-
+        echo "Parsing coverage JSON for source files..."
         set +e
         SOURCE_FILES=$(jq -r '.data[0].files[] | select(.filename | test("/\\.build/") | not) | select(.filename | test("\\.swift$")) | select(.filename | test("/(Tests?|test)/") | not) | .filename' "$CODECOV_PATH" 2>&1)
         jq_exit_code=$?
@@ -388,10 +409,13 @@ runs:
         fi
 
         SOURCE_FILE_COUNT=$(echo "$SOURCE_FILES" | grep -c . || echo "0")
+        echo "Found $SOURCE_FILE_COUNT source files"
 
         if [ "$SOURCE_FILE_COUNT" -eq 0 ]; then
+          echo "No source files found, using placeholder"
           ALL_FILES="$PROJECT_NAME|0|0"
         else
+          echo "Extracting coverage data for all files..."
           set +e
           ALL_FILES=$(jq -r '.data[0].files[] | select(.filename | test("/\\.build/") | not) | select(.filename | test("\\.swift$")) | select(.filename | test("/(Tests?|test)/") | not) | "\(.filename)|\(.summary.lines.count)|\(.summary.lines.covered)"' "$CODECOV_PATH" 2>&1)
           jq_exit_code=$?
@@ -402,8 +426,11 @@ runs:
             echo "jq output: $ALL_FILES"
             exit 1
           fi
+          echo "✅ Coverage data extracted for all files"
         fi
+        echo ""
 
+        echo "=== Grouping Files by Target ==="
         THRESHOLD="${{ inputs.coverage-threshold }}"
         [ -n "$THRESHOLD" ] && show_quality="true" || show_quality="false"
 
@@ -412,7 +439,10 @@ runs:
         COVERAGE_VALUES=$(mktemp)
         COVERAGE_SUMMARY_FILE="${{ github.workspace }}/coverage_summary.txt"
 
+        echo "Parsing files and extracting target names..."
+        file_count=0
         while IFS='|' read -r filename total_lines covered_lines; do
+          file_count=$((file_count + 1))
           if [ -n "$filename" ]; then
             target_name=""
 
@@ -431,8 +461,19 @@ runs:
           fi
         done <<< "$ALL_FILES"
 
+        echo "Processed $file_count files"
+        if [ -s "$TARGETS_DATA" ]; then
+          targets_count=$(wc -l < "$TARGETS_DATA")
+          echo "Found $targets_count target entries (before aggregation)"
+        else
+          echo "⚠️  No target data collected"
+        fi
+        echo ""
+
+        echo "=== Aggregating Coverage by Target ==="
         AGGREGATED_DATA=$(mktemp)
         if [ -s "$TARGETS_DATA" ]; then
+          echo "Aggregating target data..."
           sort "$TARGETS_DATA" | awk -F'|' '
           {
             target = $1
@@ -444,14 +485,24 @@ runs:
               print target "|" total_lines[target] "|" covered_lines[target]
             }
           }' > "$AGGREGATED_DATA"
-        fi
 
+          if [ -s "$AGGREGATED_DATA" ]; then
+            agg_count=$(wc -l < "$AGGREGATED_DATA")
+            echo "Aggregated into $agg_count unique targets"
+          fi
+        else
+          echo "No targets data to aggregate"
+        fi
+        echo ""
+
+        echo "=== Generating Coverage Table ==="
         target_counter=1
         total_coverage_sum=0
         target_count=0
         total_lines_sum=0
 
         if [ -s "$AGGREGATED_DATA" ]; then
+          echo "Generating table rows for each target..."
           while IFS='|' read -r target_name total_lines covered_lines; do
             if [ -n "$target_name" ]; then
               if [ -f "$TARGET_COVERAGE_META" ]; then
@@ -473,9 +524,12 @@ runs:
               target_counter=$((target_counter + 1))
             fi
           done < <(sort "$AGGREGATED_DATA")
+          echo "Generated $((target_counter - 1)) table rows"
         else
+          echo "No aggregated data, adding placeholder row"
           echo "| 1 | $PROJECT_NAME | 0 | **0%** |" >> "$TABLE_BODY"
         fi
+        echo ""
 
         echo "Calculating average coverage..."
         if [ -f "$COVERAGE_VALUES" ]; then
