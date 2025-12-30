@@ -16,16 +16,12 @@ tags:
 
 inputs:
   # Basic configuration
-  macos-version:
-    description: 'macOS runner version (e.g., "latest", "15", "14")'
-    required: false
-    default: 'latest'
   xcode-version:
     description: 'Xcode version to use (default: system default)'
     required: false
     default: ''
-  source-path-override:
-    description: 'Override source path pattern (default: {PROJECT}/Sources)'
+  platforms-override:
+    description: 'Override platforms to test (e.g., "macos", "ios", or "macos,ios"). If not set, runs single platform with priority: macOS > iOS'
     required: false
     default: ''
   project-name-override:
@@ -79,15 +75,33 @@ outputs:
 runs:
   using: composite
   steps:
+    - name: Check for skip label
+      id: skip-check
+      shell: bash
+      run: |
+        if [ "${{ github.event_name }}" = "pull_request" ]; then
+          LABELS='${{ toJSON(github.event.pull_request.labels.*.name) }}'
+          if echo "$LABELS" | grep -q '"${{ inputs.skip-label }}"'; then
+            echo "⏭️  Skip label '${{ inputs.skip-label }}' found - skipping coverage"
+            echo "skip=true" >> $GITHUB_OUTPUT
+          else
+            echo "skip=false" >> $GITHUB_OUTPUT
+          fi
+        else
+          echo "skip=false" >> $GITHUB_OUTPUT
+        fi
+
     - name: Checkout code
+      if: steps.skip-check.outputs.skip != 'true'
       uses: actions/checkout@v4
 
     - name: List Xcode installations
+      if: steps.skip-check.outputs.skip != 'true'
       shell: bash
       run: sudo ls -1 /Applications | grep "Xcode" || echo "No Xcode installations found"
 
     - name: Validate Xcode version
-      if: inputs.xcode-version != ''
+      if: steps.skip-check.outputs.skip != 'true' && inputs.xcode-version != ''
       shell: bash
       run: |
         REQUESTED_XCODE="Xcode_${{ inputs.xcode-version }}.app"
@@ -103,96 +117,363 @@ runs:
         echo "✅ Xcode ${{ inputs.xcode-version }} is available"
 
     - name: Select Xcode version
-      if: inputs.xcode-version != ''
+      if: steps.skip-check.outputs.skip != 'true' && inputs.xcode-version != ''
       shell: bash
       run: |
         XCODE_PATH="/Applications/Xcode_${{ inputs.xcode-version }}.app/Contents/Developer"
         sudo xcode-select -s "$XCODE_PATH"
 
     - name: Verify Swift Version
+      if: steps.skip-check.outputs.skip != 'true'
       shell: bash
       run: swift --version
 
-    - name: Run Swift Tests with Coverage
+    - name: Detect Platforms from Package.swift
+      if: steps.skip-check.outputs.skip != 'true'
+      id: detect-platforms
       shell: bash
       working-directory: ${{ inputs.working-directory }}
       run: |
-        swift test --enable-swift-testing --enable-code-coverage
-        CODECOV_PATH=$(swift test --enable-swift-testing --enable-code-coverage --show-codecov-path)
-        echo "CODECOV_PATH=$CODECOV_PATH" >> $GITHUB_ENV
+        OVERRIDE_PLATFORMS="${{ inputs.platforms-override }}"
 
-    - name: Process Coverage Data
-      id: extract
+        if [ -n "$OVERRIDE_PLATFORMS" ]; then
+          PLATFORMS_TO_TEST="$OVERRIDE_PLATFORMS"
+          echo "Using override platforms: $PLATFORMS_TO_TEST"
+        else
+          if [ ! -f "Package.swift" ]; then
+            echo "❌ Package.swift not found. At least macOS or iOS platform required."
+            exit 1
+          fi
+
+          set +e
+          PACKAGE_JSON=$(swift package dump-package 2>&1)
+          DUMP_EXIT_CODE=$?
+          set -e
+
+          if [ $DUMP_EXIT_CODE -ne 0 ]; then
+            echo "❌ Failed to parse Package.swift. At least macOS or iOS platform required."
+            exit 1
+          fi
+
+          DETECTED_PLATFORMS=$(echo "$PACKAGE_JSON" | jq -r '.platforms[]?.platformName // empty' | tr '\n' ',' | sed 's/,$//')
+
+          if [ -z "$DETECTED_PLATFORMS" ]; then
+            echo "❌ No platforms specified in Package.swift. At least macOS or iOS platform required."
+            exit 1
+          fi
+
+          if echo "$DETECTED_PLATFORMS" | grep -qi "macos"; then
+            PLATFORMS_TO_TEST="macos"
+          elif echo "$DETECTED_PLATFORMS" | grep -qi "ios"; then
+            PLATFORMS_TO_TEST="ios"
+          else
+            echo "❌ Neither macOS nor iOS found. Detected: $DETECTED_PLATFORMS"
+            exit 1
+          fi
+
+          echo "Detected: $DETECTED_PLATFORMS, selected: $PLATFORMS_TO_TEST"
+        fi
+
+        echo "platforms=$PLATFORMS_TO_TEST" >> $GITHUB_OUTPUT
+
+    - name: Run Swift Tests with Coverage
+      if: steps.skip-check.outputs.skip != 'true'
       shell: bash
       working-directory: ${{ inputs.working-directory }}
       run: |
-        # Set project name and source path
+        PLATFORMS="${{ steps.detect-platforms.outputs.platforms }}"
         PROJECT_NAME="${{ inputs.project-name-override }}"
         if [ -z "$PROJECT_NAME" ]; then
           PROJECT_NAME="${{ github.event.repository.name }}"
         fi
 
-        SOURCE_PATH="${{ inputs.source-path-override }}"
-        if [ -z "$SOURCE_PATH" ]; then
-          SOURCE_PATH="${PROJECT_NAME}/Sources"
+        COVERAGE_PATHS_FILE="${{ github.workspace }}/coverage_paths.txt"
+        FAILED_PLATFORMS=""
+        IFS=',' read -ra PLATFORM_ARRAY <<< "$PLATFORMS"
+
+        for platform in "${PLATFORM_ARRAY[@]}"; do
+          platform=$(echo "$platform" | xargs)
+          echo "Testing $platform..."
+
+          case "$platform" in
+            macos)
+              set +e
+              swift test --enable-swift-testing --enable-code-coverage
+              TEST_EXIT_CODE=$?
+              set -e
+
+              if [ $TEST_EXIT_CODE -eq 0 ]; then
+                PACKAGE_NAME=$(swift package dump-package 2>/dev/null | jq -r '.name' 2>/dev/null || echo "$PROJECT_NAME")
+                CODECOV_PATH=".build/debug/codecov/${PACKAGE_NAME}.json"
+
+                if [ ! -f "$CODECOV_PATH" ]; then
+                  CODECOV_PATH=$(find .build/debug/codecov -name "*.json" -type f | head -1)
+                fi
+
+                if [ -f "$CODECOV_PATH" ]; then
+                  echo "macos|spm|$CODECOV_PATH" >> "$COVERAGE_PATHS_FILE"
+                  echo "✅ macOS tests passed (coverage: $CODECOV_PATH)"
+                else
+                  echo "⚠️  macOS tests passed but no coverage data found"
+                  echo "Searched in .build/debug/codecov/"
+                  ls -la .build/debug/codecov/ || echo "Directory doesn't exist"
+                fi
+              else
+                echo "❌ macOS tests failed"
+                FAILED_PLATFORMS="$FAILED_PLATFORMS macos"
+              fi
+              ;;
+
+            ios)
+              RUNTIME=$(xcrun simctl list runtimes | grep "iOS" | grep -v "unavailable" | tail -1 | grep -oE "com\.apple\.CoreSimulator\.SimRuntime\.iOS-[0-9-]+")
+
+              if [ -z "$RUNTIME" ]; then
+                echo "❌ No iOS runtime available"
+                FAILED_PLATFORMS="$FAILED_PLATFORMS ios"
+                continue
+              fi
+
+              set +e
+              SIMULATOR_ID=$(xcrun simctl create swift-coverage-ios com.apple.CoreSimulator.SimDeviceType.iPhone-15 "$RUNTIME" 2>&1 | tail -1)
+              CREATE_EXIT_CODE=$?
+              set -e
+
+              if [ $CREATE_EXIT_CODE -ne 0 ]; then
+                echo "❌ Failed to create iOS simulator"
+                FAILED_PLATFORMS="$FAILED_PLATFORMS ios"
+                continue
+              fi
+
+              set +e
+              xcrun simctl boot "$SIMULATOR_ID"
+              BOOT_EXIT_CODE=$?
+              set -e
+
+              if [ $BOOT_EXIT_CODE -ne 0 ]; then
+                echo "❌ Failed to boot simulator"
+                xcrun simctl delete "$SIMULATOR_ID" || true
+                FAILED_PLATFORMS="$FAILED_PLATFORMS ios"
+                continue
+              fi
+
+              sleep 5
+
+              set +e
+              xcodebuild test \
+                -scheme "$PROJECT_NAME" \
+                -destination "id=$SIMULATOR_ID" \
+                -derivedDataPath .build/ios \
+                -enableCodeCoverage YES
+              TEST_EXIT_CODE=$?
+              set -e
+
+              xcrun simctl shutdown "$SIMULATOR_ID" || true
+              xcrun simctl delete "$SIMULATOR_ID" || true
+
+              if [ $TEST_EXIT_CODE -eq 0 ]; then
+                XCRESULT=$(find .build/ios -name "*.xcresult" -type d | head -1)
+                if [ -n "$XCRESULT" ]; then
+                  echo "ios|xcresult|$XCRESULT" >> "$COVERAGE_PATHS_FILE"
+                  echo "✅ iOS tests passed"
+                else
+                  echo "⚠️  No coverage data found"
+                fi
+              else
+                echo "❌ iOS tests failed"
+                FAILED_PLATFORMS="$FAILED_PLATFORMS ios"
+              fi
+              ;;
+
+            tvos|watchos|visionos)
+              echo "⏭️  Skipping $platform (not supported)"
+              ;;
+
+            *)
+              echo "⚠️  Unknown platform: $platform"
+              ;;
+          esac
+        done
+
+        echo "COVERAGE_PATHS_FILE=$COVERAGE_PATHS_FILE" >> $GITHUB_ENV
+        [ -n "$FAILED_PLATFORMS" ] && echo "FAILED_PLATFORMS=$FAILED_PLATFORMS" >> $GITHUB_ENV
+
+    - name: Process Coverage Data
+      if: steps.skip-check.outputs.skip != 'true'
+      id: extract
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        echo "=== Starting Coverage Processing ==="
+        COVERAGE_PATHS_FILE="${{ env.COVERAGE_PATHS_FILE }}"
+        echo "Coverage paths file: $COVERAGE_PATHS_FILE"
+
+        if [ ! -f "$COVERAGE_PATHS_FILE" ]; then
+          echo "❌ Error: Coverage paths file does not exist"
+          exit 1
         fi
 
-        # Check if there are any actual source files to report on
-        SOURCE_FILE_COUNT=$(jq -r '.data[0].files[] | select(.filename | test("/\\.build/") | not) | select(.filename | test("\\.swift$")) | select(.filename | test("/(Tests?|test)/") | not) | .filename' "$CODECOV_PATH" | wc -l)
+        if [ ! -s "$COVERAGE_PATHS_FILE" ]; then
+          echo "❌ Error: Coverage paths file is empty"
+          cat "$COVERAGE_PATHS_FILE"
+          exit 1
+        fi
+
+        echo "Coverage paths file content:"
+        cat "$COVERAGE_PATHS_FILE"
+        echo ""
+
+        MERGED_COVERAGE=$(mktemp)
+        echo '{"data":[{"files":[]}]}' > "$MERGED_COVERAGE"
+        TARGET_COVERAGE_META=$(mktemp)
+
+        echo "Merging coverage data from all platforms..."
+
+        while IFS='|' read -r platform coverage_type coverage_path; do
+          echo "Read line: platform='$platform' type='$coverage_type' path='$coverage_path'"
+
+          [ -z "$coverage_path" ] && { echo "Skipping empty coverage path"; continue; }
+
+          if [ ! -e "$coverage_path" ]; then
+            echo "⚠️  Warning: Coverage path not found: $coverage_path"
+            continue
+          fi
+
+          echo "Processing $platform coverage ($coverage_type) from $coverage_path"
+
+          if [ "$coverage_type" = "xcresult" ]; then
+            COVERAGE_JSON=$(mktemp)
+            xcrun xccov view --report --json "$coverage_path" > "$COVERAGE_JSON"
+
+            jq -r '.targets[] | select(.name | test("(Tests?|test)") | not) | "\(.name)|\(.lineCoverage)|\(.executableLines)"' "$COVERAGE_JSON" >> "$TARGET_COVERAGE_META"
+
+            TRANSFORMED_JSON=$(mktemp)
+            jq '{
+              data: [{
+                files: [
+                  .targets[] as $target | $target.files[] | {
+                    filename: ($target.name + ":::" + .path),
+                    summary: {
+                      lines: {
+                        count: .executableLines,
+                        covered: .coveredLines
+                      }
+                    }
+                  }
+                ]
+              }]
+            }' "$COVERAGE_JSON" > "$TRANSFORMED_JSON"
+
+            jq -s '{data:[{files: (.[0].data[0].files + .[1].data[0].files)}]}' \
+              "$MERGED_COVERAGE" "$TRANSFORMED_JSON" > "${MERGED_COVERAGE}.tmp"
+            mv "${MERGED_COVERAGE}.tmp" "$MERGED_COVERAGE"
+            rm -f "$COVERAGE_JSON" "$TRANSFORMED_JSON"
+
+          elif [ "$coverage_type" = "spm" ]; then
+            echo "Merging SPM coverage data..."
+            jq -s '{data:[{files: (.[0].data[0].files + .[1].data[0].files)}]}' \
+              "$MERGED_COVERAGE" "$coverage_path" > "${MERGED_COVERAGE}.tmp"
+            mv "${MERGED_COVERAGE}.tmp" "$MERGED_COVERAGE"
+            echo "SPM coverage merged successfully"
+          fi
+        done < "$COVERAGE_PATHS_FILE"
+
+        echo "✅ Coverage merge complete"
+        echo ""
+
+        CODECOV_PATH="$MERGED_COVERAGE"
+        PROJECT_NAME="${{ inputs.project-name-override }}"
+        [ -z "$PROJECT_NAME" ] && PROJECT_NAME="${{ github.event.repository.name }}"
+
+        echo "=== Extracting Coverage Data ==="
+        echo "Coverage file: $CODECOV_PATH"
+        echo "Project name: $PROJECT_NAME"
+
+        if [ ! -f "$CODECOV_PATH" ]; then
+          echo "❌ Error: Coverage file not found at $CODECOV_PATH"
+          exit 1
+        fi
+
+        echo "Parsing coverage JSON for source files..."
+        set +e
+        SOURCE_FILES=$(jq -r '.data[0].files[] | select(.filename | test("/\\.build/") | not) | select(.filename | test("\\.swift$")) | select(.filename | test("/(Tests?|test)/") | not) | .filename' "$CODECOV_PATH" 2>&1)
+        jq_exit_code=$?
+        set -e
+
+        if [ $jq_exit_code -ne 0 ]; then
+          echo "❌ Error: Failed to parse coverage JSON (exit code: $jq_exit_code)"
+          echo "jq output: $SOURCE_FILES"
+          echo ""
+          echo "Coverage file content (first 30 lines):"
+          head -30 "$CODECOV_PATH"
+          exit 1
+        fi
+
+        SOURCE_FILE_COUNT=$(echo "$SOURCE_FILES" | grep -c . || echo "0")
+        echo "Found $SOURCE_FILE_COUNT source files"
 
         if [ "$SOURCE_FILE_COUNT" -eq 0 ]; then
-          # Create a placeholder entry when no source files exist
+          echo "No source files found, using placeholder"
           ALL_FILES="$PROJECT_NAME|0|0"
         else
-          # Extract all Swift files excluding build artifacts
-          ALL_FILES=$(jq -r '.data[0].files[] | select(.filename | test("/\\.build/") | not) | select(.filename | test("\\.swift$")) | select(.filename | test("/(Tests?|test)/") | not) | "\(.filename)|\(.summary.lines.count)|\(.summary.lines.covered)"' "$CODECOV_PATH")
-        fi
+          echo "Extracting coverage data for all files..."
+          set +e
+          ALL_FILES=$(jq -r '.data[0].files[] | select(.filename | test("/\\.build/") | not) | select(.filename | test("\\.swift$")) | select(.filename | test("/(Tests?|test)/") | not) | "\(.filename)|\(.summary.lines.count)|\(.summary.lines.covered)"' "$CODECOV_PATH" 2>&1)
+          jq_exit_code=$?
+          set -e
 
-        # Initialize - check if threshold is set
+          if [ $jq_exit_code -ne 0 ]; then
+            echo "❌ Error: Failed to extract coverage data (exit code: $jq_exit_code)"
+            echo "jq output: $ALL_FILES"
+            exit 1
+          fi
+          echo "✅ Coverage data extracted for all files"
+        fi
+        echo ""
+
+        echo "=== Grouping Files by Target ==="
         THRESHOLD="${{ inputs.coverage-threshold }}"
-        if [ -n "$THRESHOLD" ]; then
-          show_quality="true"
-        else
-          show_quality="false"
-        fi
+        [ -n "$THRESHOLD" ] && show_quality="true" || show_quality="false"
 
-        # Create temporary files for target data
         TARGETS_DATA=$(mktemp)
         TABLE_BODY=$(mktemp)
+        COVERAGE_VALUES=$(mktemp)
         COVERAGE_SUMMARY_FILE="${{ github.workspace }}/coverage_summary.txt"
 
-        # Parse files and group by target
+        echo "Parsing files and extracting target names..."
+        file_count=0
         while IFS='|' read -r filename total_lines covered_lines; do
+          file_count=$((file_count + 1))
           if [ -n "$filename" ]; then
-            # Extract target name from file path patterns:
-            # Pattern 1: /path/to/TargetName/Sources/...
-            # Pattern 2: /path/to/Sources/TargetName/...
-            # Pattern 3: /path/to/TargetName/...
             target_name=""
 
-            if echo "$filename" | grep -q '/Sources/[^/]*/'; then
-              # Pattern: .../Sources/TargetName/...
+            if echo "$filename" | grep -q ':::'; then
+              target_name=$(echo "$filename" | cut -d':' -f1)
+            elif echo "$filename" | grep -q '/Sources/[^/]*/'; then
               target_name=$(echo "$filename" | sed -E 's|.*/Sources/([^/]+)/.*|\1|')
             elif echo "$filename" | grep -q '/Sources/[^/]*\.swift$'; then
-              # Pattern: .../Sources/file.swift (direct in Sources)
               target_name=$(echo "$filename" | sed -E 's|.*/Sources/([^/]*)\.swift$|\1|')
             else
               target_name="$PROJECT_NAME"
             fi
 
-            # Skip if target name looks like a test
-            if echo "$target_name" | grep -qi test; then
-              continue
-            fi
-
-            # Write target data to temp file
+            echo "$target_name" | grep -qi test && continue
             echo "$target_name|$total_lines|$covered_lines" >> "$TARGETS_DATA"
           fi
         done <<< "$ALL_FILES"
 
-        # Aggregate data by target
+        echo "Processed $file_count files"
+        if [ -s "$TARGETS_DATA" ]; then
+          targets_count=$(wc -l < "$TARGETS_DATA")
+          echo "Found $targets_count target entries (before aggregation)"
+        else
+          echo "⚠️  No target data collected"
+        fi
+        echo ""
+
+        echo "=== Aggregating Coverage by Target ==="
         AGGREGATED_DATA=$(mktemp)
         if [ -s "$TARGETS_DATA" ]; then
+          echo "Aggregating target data..."
           sort "$TARGETS_DATA" | awk -F'|' '
           {
             target = $1
@@ -204,110 +485,107 @@ runs:
               print target "|" total_lines[target] "|" covered_lines[target]
             }
           }' > "$AGGREGATED_DATA"
-        fi
 
-        # Generate table rows for each target
+          if [ -s "$AGGREGATED_DATA" ]; then
+            agg_count=$(wc -l < "$AGGREGATED_DATA")
+            echo "Aggregated into $agg_count unique targets"
+          fi
+        else
+          echo "No targets data to aggregate"
+        fi
+        echo ""
+
+        echo "=== Generating Coverage Table ==="
         target_counter=1
         total_coverage_sum=0
         target_count=0
         total_lines_sum=0
 
         if [ -s "$AGGREGATED_DATA" ]; then
-          # Process each target and add to table
+          echo "Generating table rows for each target..."
           while IFS='|' read -r target_name total_lines covered_lines; do
             if [ -n "$target_name" ]; then
-              if [ $total_lines -gt 0 ]; then
-                target_coverage=$(echo "scale=6; $covered_lines * 100 / $total_lines" | bc)
+              if [ -f "$TARGET_COVERAGE_META" ]; then
+                META_LINE=$(grep "^${target_name}|" "$TARGET_COVERAGE_META" | head -1)
+                if [ -n "$META_LINE" ]; then
+                  META_COVERAGE=$(echo "$META_LINE" | cut -d'|' -f2)
+                  target_coverage=$(echo "scale=6; $META_COVERAGE * 100" | bc)
+                else
+                  [ $total_lines -gt 0 ] && target_coverage=$(echo "scale=6; $covered_lines * 100 / $total_lines" | bc) || target_coverage=0
+                fi
               else
-                target_coverage=0
+                [ $total_lines -gt 0 ] && target_coverage=$(echo "scale=6; $covered_lines * 100 / $total_lines" | bc) || target_coverage=0
               fi
 
               target_coverage_rounded=$(echo "$target_coverage" | awk '{print int($1 * 100 + 0.5) / 100}')
-
               echo "| $target_counter | $target_name | $total_lines | **${target_coverage_rounded}%** |" >> "$TABLE_BODY"
-
-              # For overall average calculation
-              echo "$target_coverage" >> /tmp/coverage_values.txt
+              echo "$target_coverage" >> "$COVERAGE_VALUES"
               total_lines_sum=$((total_lines_sum + total_lines))
               target_counter=$((target_counter + 1))
-
             fi
           done < <(sort "$AGGREGATED_DATA")
+          echo "Generated $((target_counter - 1)) table rows"
         else
-          # Fallback: add a single entry with project name
+          echo "No aggregated data, adding placeholder row"
           echo "| 1 | $PROJECT_NAME | 0 | **0%** |" >> "$TABLE_BODY"
         fi
+        echo ""
 
-        # Calculate overall average coverage
-        if [ -f /tmp/coverage_values.txt ]; then
-          target_count=$(wc -l < /tmp/coverage_values.txt)
+        echo "Calculating average coverage..."
+        if [ -f "$COVERAGE_VALUES" ]; then
+          target_count=$(wc -l < "$COVERAGE_VALUES")
+          echo "Found $target_count targets in coverage values file"
           if [ $target_count -gt 0 ]; then
-            total_coverage_sum=$(awk '{sum+=$1} END {print sum}' /tmp/coverage_values.txt)
+            total_coverage_sum=$(awk '{sum+=$1} END {print sum}' "$COVERAGE_VALUES")
             average_coverage=$(echo "scale=6; $total_coverage_sum / $target_count" | bc)
           else
+            echo "No targets found, setting coverage to 0"
             average_coverage=0
           fi
-          rm -f /tmp/coverage_values.txt
+          rm -f "$COVERAGE_VALUES"
         else
+          echo "Coverage values file not found, setting coverage to 0"
           average_coverage=0
         fi
 
-        # Clean up temp files
-        rm -f "$TARGETS_DATA" "$AGGREGATED_DATA"
-
         average_coverage_rounded=$(echo "$average_coverage" | awk '{print int($1 * 100 + 0.5) / 100}')
 
-        # Determine header icon based on average coverage
         coverage_header="Coverage"
         if [ "$show_quality" = "true" ]; then
           coverage_int=$(echo "$average_coverage_rounded" | awk '{print int($1)}')
-          if [ "$coverage_int" -lt "$THRESHOLD" ]; then
-            coverage_header="⚠️"
-          else
-            coverage_header="✅"
-          fi
+          [ "$coverage_int" -lt "$THRESHOLD" ] && coverage_header="⚠️" || coverage_header="✅"
         fi
 
-        # Write final table with header + body
         cat <<EOF > "$COVERAGE_SUMMARY_FILE"
         |   №  | Target | Lines | $coverage_header |
         |:----:|--------|------:|:---------:|
         EOF
         cat "$TABLE_BODY" >> "$COVERAGE_SUMMARY_FILE"
 
-        # Add average/combined coverage row if multiple targets
-        if [ $target_count -gt 1 ]; then
-          echo "| | <p align=\"right\">**Total**</p> | $total_lines_sum | **${average_coverage_rounded}%** |" >> "$COVERAGE_SUMMARY_FILE"
-        fi
+        [ $target_count -gt 1 ] && echo "| | <p align=\"right\">**Total**</p> | $total_lines_sum | **${average_coverage_rounded}%** |" >> "$COVERAGE_SUMMARY_FILE"
 
-        # Clean up temp files
         rm -f "$TABLE_BODY"
-
-        # Output for next steps
         echo "coverage=$average_coverage_rounded" >> $GITHUB_OUTPUT
-
-        # Output table for combined comments
         echo "coverage-table<<EOF" >> $GITHUB_OUTPUT
         cat "$COVERAGE_SUMMARY_FILE" >> $GITHUB_OUTPUT
         echo "EOF" >> $GITHUB_OUTPUT
+        [ -n "$THRESHOLD" ] && echo "threshold=$THRESHOLD" >> $GITHUB_OUTPUT || echo "threshold=" >> $GITHUB_OUTPUT
 
-        # Output threshold for comment footer (if set)
-        if [ -n "$THRESHOLD" ]; then
-          echo "threshold=$THRESHOLD" >> $GITHUB_OUTPUT
-        else
-          echo "threshold=" >> $GITHUB_OUTPUT
-        fi
-
-        # Echo coverage summary to logs (visible for all workflows: PR, direct push, etc.)
         echo ""
         echo "📊 Coverage Summary:"
         if [ -s "$AGGREGATED_DATA" ]; then
           while IFS='|' read -r target_name total_lines covered_lines; do
             if [ -n "$target_name" ]; then
-              if [ $total_lines -gt 0 ]; then
-                target_coverage=$(echo "scale=6; $covered_lines * 100 / $total_lines" | bc)
+              if [ -f "$TARGET_COVERAGE_META" ]; then
+                META_LINE=$(grep "^${target_name}|" "$TARGET_COVERAGE_META" | head -1)
+                if [ -n "$META_LINE" ]; then
+                  META_COVERAGE=$(echo "$META_LINE" | cut -d'|' -f2)
+                  target_coverage=$(echo "scale=6; $META_COVERAGE * 100" | bc)
+                else
+                  [ $total_lines -gt 0 ] && target_coverage=$(echo "scale=6; $covered_lines * 100 / $total_lines" | bc) || target_coverage=0
+                fi
               else
-                target_coverage=0
+                [ $total_lines -gt 0 ] && target_coverage=$(echo "scale=6; $covered_lines * 100 / $total_lines" | bc) || target_coverage=0
               fi
               target_coverage_rounded=$(echo "$target_coverage" | awk '{print int($1 * 100 + 0.5) / 100}')
               echo "  • $target_name: ${target_coverage_rounded}%"
@@ -315,13 +593,13 @@ runs:
           done < <(sort "$AGGREGATED_DATA")
         fi
         echo "  Overall: ${average_coverage_rounded}%"
-        if [ -n "$THRESHOLD" ]; then
-          echo "  Threshold: ${THRESHOLD}%"
-        fi
+        [ -n "$THRESHOLD" ] && echo "  Threshold: ${THRESHOLD}%"
         echo ""
 
+        rm -f "$TARGETS_DATA" "$AGGREGATED_DATA" "$TARGET_COVERAGE_META" "$MERGED_COVERAGE" "${{ github.workspace }}/coverage_paths.txt"
+
     - name: Comment on Pull Request
-      if: github.event_name == 'pull_request' && inputs.post-comment == 'true'
+      if: steps.skip-check.outputs.skip != 'true' && github.event_name == 'pull_request' && inputs.post-comment == 'true'
       uses: actions/github-script@v7
       with:
         script: |
@@ -360,7 +638,7 @@ runs:
 
           ${coverageOutput}
           ${thresholdSection}
-          _Generated by [Swift Coverage Action](https://github.com/oleksiikolomiietssnapp/swift-coverage-action)._
+          _Generated by [Swift Coverage Action](https://github.com/Snapp-Mobile/swift-coverage-action)._
           ${commentMarker}
           `;
 
@@ -395,7 +673,7 @@ runs:
           console.log(`✅ Coverage comment posted successfully (ID: ${jobId})`);
 
     - name: Check Coverage Threshold
-      if: inputs.fail-on-low-coverage == 'true' && inputs.coverage-threshold != ''
+      if: steps.skip-check.outputs.skip != 'true' && inputs.fail-on-low-coverage == 'true' && inputs.coverage-threshold != ''
       shell: bash
       run: |
         COVERAGE=${{ steps.extract.outputs.coverage }}
